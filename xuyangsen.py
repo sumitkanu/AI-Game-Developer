@@ -36,13 +36,19 @@ FPS = 60
 # Game status
 score = 0
 health = MAX_HEALTH
-fell_into_lava = False  # Mark whether player has eneter the lava
+fell_into_lava = False
+game_over = False
+level_complete = False  # Track level completion status
 
 # Clock control
 clock = pygame.time.Clock()
 
 # Font
 font = pygame.font.SysFont('Arial', 24)
+
+# Load door image
+door_image = pygame.image.load('Door.png')
+door_image = pygame.transform.scale(door_image, (CELL_SIZE, CELL_SIZE))
 
 class Cell:
     def __init__(self, x, y):
@@ -53,6 +59,7 @@ class Cell:
         self.is_lava = False       
         self.is_treasure = False
         self.is_visited = False
+        self.is_exit = False  # Add exit door flag
 
 class Player:
     def __init__(self, x, y):
@@ -94,6 +101,7 @@ class Player:
         return False
     
     def move(self, dx, dy, grid):
+        global game_over
         # Calculate new position first
         new_x = self.x + dx
         new_y = self.y + dy
@@ -120,14 +128,19 @@ class Player:
                 global health, fell_into_lava
                 health = 0
                 fell_into_lava = True
-                print("Magma detected! Player dies")
                 return False
         
-        # Check if it hits a wall
+        # Check if hits a wall
         for grid_x, grid_y in grid_positions:
             if grid[grid_y][grid_x].is_wall:
                 can_move = False
                 break
+
+        # Check if reached exit door
+        for grid_x, grid_y in grid_positions:
+            if grid[grid_y][grid_x].is_exit:
+                game_over = True
+                return True
         
         # If moveable, update location
         if can_move:
@@ -136,7 +149,7 @@ class Player:
             self.rect.x = new_x
             self.rect.y = new_y
             
-            # Examine the treasure after a successful move
+            # Check for treasure collection
             for grid_x, grid_y in grid_positions:
                 if grid[grid_y][grid_x].is_treasure:
                     global score
@@ -144,6 +157,7 @@ class Player:
                     grid[grid_y][grid_x].is_treasure = False
         
         return can_move
+
 def is_path_accessible(grid, start_x, start_y, end_x, end_y):
     """Use BFS to check if there is a feasible path from the starting point to the end point"""
     if start_x == end_x and start_y == end_y:
@@ -435,6 +449,14 @@ def generate_dungeon():
                 not (x == start_x and y == start_y)):
                 grid[y][x].is_treasure = True
                 treasures_count += 1
+            
+            # Place exit door at the bottom right area
+            exit_x = GRID_WIDTH - 2
+            exit_y = GRID_HEIGHT - 2
+            grid[exit_y][exit_x].is_exit = True
+            grid[exit_y][exit_x].is_wall = False
+            grid[exit_y][exit_x].is_lava = False
+            grid[exit_y][exit_x].is_treasure = False
         
         # If we get here, we have a valid map
         return grid, start_x, start_y
@@ -538,6 +560,8 @@ def draw_grid(grid):
             elif grid[y][x].is_lava:
                 pygame.draw.rect(screen, BLACK, rect)
                 pygame.draw.rect(screen, RED, rect.inflate(-4, -4))  
+            elif grid[y][x].is_exit:
+                screen.blit(door_image, rect)  # Draw door image instead of green rectangle
             else:
                 pygame.draw.rect(screen, BLACK, rect)
                 pygame.draw.rect(screen, WHITE, rect, 1) 
@@ -551,16 +575,6 @@ def draw_hud():
     # Plotting fractions
     score_text = font.render(f"Score: {score}", True, WHITE)
     screen.blit(score_text, (10, 10))
-    
-    # Plotting life values
-    health_text = font.render(f"health: {health}", True, WHITE)
-    screen.blit(health_text, (10, 40))
-    
-    # Drawing the life bar
-    health_bar_rect = pygame.Rect(120, 45, 150, 15)
-    health_fill_rect = pygame.Rect(120, 45, 150 * (health / MAX_HEALTH), 15)
-    pygame.draw.rect(screen, RED, health_bar_rect, 2)
-    pygame.draw.rect(screen, RED, health_fill_rect)
 
 def show_lava_death_screen():
     """Showing death by falling into lava"""
