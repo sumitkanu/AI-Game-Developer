@@ -2,6 +2,11 @@ import pygame
 import random
 import math
 import sys
+import numpy as np
+import torch
+# Import the RL module
+from dungeon_rl import train_dungeon_generator, generate_dungeon_with_model
+from dungeon_rl import EMPTY, WALL, LAVA, TREASURE, EXIT, START
 
 # Initial pygame
 pygame.init()
@@ -343,139 +348,74 @@ class Enemy:
                return False
        
        return True
-    
+
+# Global variable for the trained agent
+rl_agent = None
+
+def train_rl_model():
+    """Train the RL model for dungeon generation"""
+    global rl_agent
+    print("Training RL model for dungeon generation...")
+    # Use larger grid dimensions for more complex maps
+    rl_width = GRID_WIDTH  # Or a larger value like GRID_WIDTH + 10
+    rl_height = GRID_HEIGHT  # Or a larger value like GRID_HEIGHT + 10
+    rl_agent, _ = train_dungeon_generator(rl_width, rl_height, num_episodes=2000)
+    print("RL model training complete!")
+
 def generate_dungeon():
-    """Generate a valid dungeon map automatically"""
-    while True:  # Keep trying until we generate a valid map
-        # Create grid
+    """Generate a dungeon map using the RL model if available, otherwise use random generation"""
+    global rl_agent
+    
+    # Check if RL agent is available
+    if rl_agent is not None:
+        # Generate dungeon using RL model
+        print("Generating dungeon using RL model...")
+        rl_grid = generate_dungeon_with_model(rl_agent, GRID_WIDTH, GRID_HEIGHT)
+        
+        # Convert RL grid to game grid format
         grid = [[Cell(x, y) for x in range(GRID_WIDTH)] for y in range(GRID_HEIGHT)]
         
-        # Set starting point
-        start_x, start_y = 1, 1
-        
-        # Add walls
-        for y in range(GRID_HEIGHT):
-            for x in range(GRID_WIDTH):
-                # Border walls
-                if x == 0 or y == 0 or x == GRID_WIDTH - 1 or y == GRID_HEIGHT - 1:
+        # Map RL grid values to game grid cell properties
+        for y in range(min(len(rl_grid), GRID_HEIGHT)):
+            for x in range(min(len(rl_grid[0]), GRID_WIDTH)):
+                if rl_grid[y, x] == WALL:
                     grid[y][x].is_wall = True
-                # Random walls
-                elif random.random() < 0.3 and not (x == start_x and y == start_y):
-                    grid[y][x].is_wall = True
-        
-        # Create safe starting area
-        safe_radius = 4
-        for dy in range(-safe_radius, safe_radius + 1):
-            for dx in range(-safe_radius, safe_radius + 1):
-                nx, ny = start_x + dx, start_y + dy
-                if 0 <= nx < GRID_WIDTH and 0 <= ny < GRID_HEIGHT:
-                    grid[ny][nx].is_wall = False
-                    grid[ny][nx].is_visited = True
-        
-        # Add connecting passages
-        for i in range(2):
-            # Horizontal passage
-            h_y = random.randint(GRID_HEIGHT // 4, 3 * GRID_HEIGHT // 4)
-            for x in range(1, GRID_WIDTH - 1):
-                if random.random() < 0.7:
-                    grid[h_y][x].is_wall = False
-            
-            # Vertical passage
-            v_x = random.randint(GRID_WIDTH // 4, 3 * GRID_WIDTH // 4)
-            for y in range(1, GRID_HEIGHT - 1):
-                if random.random() < 0.7:
-                    grid[y][v_x].is_wall = False
-        
-        # Test map connectivity
-        if not test_map_accessibility(grid):
-            continue  # Skip to next iteration if map is not fully accessible
-        
-        # Add lava
-        lava_count = 0
-        max_lava = 5
-        attempts = 0
-        max_attempts = 100
-        
-        while lava_count < max_lava and attempts < max_attempts:
-            attempts += 1
-            x = random.randint(1, GRID_WIDTH - 2)
-            y = random.randint(1, GRID_HEIGHT - 2)
-            
-            manhattan_dist = abs(x - start_x) + abs(y - start_y)
-            
-            if (manhattan_dist > safe_radius + 2 and 
-                not grid[y][x].is_wall and 
-                not grid[y][x].is_lava and 
-                not grid[y][x].is_visited):
-                
-                has_walkable_neighbor = False
-                for dy in [-1, 0, 1]:
-                    for dx in [-1, 0, 1]:
-                        if dx == 0 and dy == 0:
-                            continue
-                        nx, ny = x + dx, y + dy
-                        if (0 <= nx < GRID_WIDTH and 0 <= ny < GRID_HEIGHT and 
-                            not grid[ny][nx].is_wall and 
-                            not grid[ny][nx].is_lava):
-                            has_walkable_neighbor = True
-                            break
-                    if has_walkable_neighbor:
-                        break
-                
-                if has_walkable_neighbor:
+                elif rl_grid[y, x] == LAVA:
                     grid[y][x].is_lava = True
-                    lava_count += 1
+                elif rl_grid[y, x] == TREASURE:
+                    grid[y][x].is_treasure = True
+                elif rl_grid[y, x] == EXIT:
+                    grid[y][x].is_exit = True
         
-        # Add treasures
-        far_point, distance = find_treasure_farthest_from_start(grid, start_x, start_y)
-        treasures_count = 0
-        max_treasures = 10
-        
-        # Place treasure at farthest point
-        if distance > 10:
-            far_x, far_y = far_point
-            if (not grid[far_y][far_x].is_wall and 
-                not grid[far_y][far_x].is_lava and
-                not (far_x == start_x and far_y == start_y)):
-                grid[far_y][far_x].is_treasure = True
-                treasures_count += 1
-        
-        # Add remaining treasures
-        while treasures_count < max_treasures:
-            x = random.randint(1, GRID_WIDTH - 2)
-            y = random.randint(1, GRID_HEIGHT - 2)
-            
-            if (not grid[y][x].is_wall and 
-                not grid[y][x].is_lava and 
-                not grid[y][x].is_treasure and
-                not (x == start_x and y == start_y)):
-                grid[y][x].is_treasure = True
-                treasures_count += 1
-            
-            # Place exit door at the bottom right area
-            exit_x = GRID_WIDTH - 2
-            exit_y = GRID_HEIGHT - 2
-            grid[exit_y][exit_x].is_exit = True
-            grid[exit_y][exit_x].is_wall = False
-            grid[exit_y][exit_x].is_lava = False
-            grid[exit_y][exit_x].is_treasure = False
-        
-        # If we get here, we have a valid map
+        start_x, start_y = 1, 1  # Assuming RL model places start at (1,1)
         return grid, start_x, start_y
+    else:
+        # Fall back to original random generation method
+        print("RL agent not available, using random generation...")
+        return original_generate_dungeon()  # Call your original function
     
-    # If a valid map cannot be generated after several attempts, a simple map is created
-    print("Unable to generate complex maps, create simple maps")
+def original_generate_dungeon():
+    """Original random dungeon generation method"""
+    # Copy your existing generate_dungeon code here
+    # [Your existing generate_dungeon code]
+    
+    # This is a placeholder - you should replace this with your actual code
     grid = [[Cell(x, y) for x in range(GRID_WIDTH)] for y in range(GRID_HEIGHT)]
     
-    # Adding only boundary walls
-    for y in range(GRID_HEIGHT):
-        for x in range(GRID_WIDTH):
-            if x == 0 or y == 0 or x == GRID_WIDTH - 1 or y == GRID_HEIGHT - 1:
-                grid[y][x].is_wall = True
-    
+    # Set starting point
     start_x, start_y = 1, 1
     
-    # Add some treasure
+    # Add walls
+    for y in range(GRID_HEIGHT):
+        for x in range(GRID_WIDTH):
+            # Border walls
+            if x == 0 or y == 0 or x == GRID_WIDTH - 1 or y == GRID_HEIGHT - 1:
+                grid[y][x].is_wall = True
+            # Random walls
+            elif random.random() < 0.3 and not (x == start_x and y == start_y):
+                grid[y][x].is_wall = True
+    
+    # Add some treasures
     for _ in range(10):
         x = random.randint(1, GRID_WIDTH - 2)
         y = random.randint(1, GRID_HEIGHT - 2)
@@ -615,6 +555,18 @@ def show_lava_death_screen():
 # Modified main function to wait for user confirmation before restarting
 def main():
     global health, score, fell_into_lava, game_over, level_complete
+    
+
+    print("Starting main function...")
+    # Train the RL model (can be done once at startup)
+    # Comment this out after you've trained the model once, and use load_model instead
+    train_rl_model()
+
+    print("Training RL model...")
+    train_rl_model()
+    
+    # Game loop begins here
+    print("Entering main game loop...")
     running = True
     
     while running:  # Outer loop for game restart
@@ -625,9 +577,9 @@ def main():
         game_over = False
         level_complete = False  
         show_death_screen = False
-        waiting_for_restart = False  # New: flag to indicate waiting for user confirmation
+        waiting_for_restart = False
         
-        # Generate map (only once at game start or restart)
+        # Generate map using RL instead of random generation
         grid, start_x, start_y = generate_dungeon()
         
         # Create player
@@ -639,7 +591,7 @@ def main():
         enemies = spawn_enemies(grid, player_x, player_y)
         
         # Game main loop
-        while running:  # Inner loop for actual gameplay
+        while running:
             # Event handling
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
@@ -677,7 +629,7 @@ def main():
                 pygame.display.flip()
                 clock.tick(FPS)
                 continue
-            
+
             # If game is over but not yet waiting for restart
             if game_over:
                 waiting_for_restart = True
@@ -690,12 +642,12 @@ def main():
                 game_over = True
                 waiting_for_restart = True
                 continue
-            
+
             if show_death_screen:
                 show_lava_death_screen()
                 pygame.display.flip()
                 continue
-            
+
             # Player movement
             keys = pygame.key.get_pressed()
             if keys[pygame.K_LEFT]:
@@ -706,7 +658,7 @@ def main():
                 player.move(0, -player.vel, grid)
             if keys[pygame.K_DOWN]:
                 player.move(0, player.vel, grid)
-            
+
             # Enemy movement and collision
             for enemy in enemies:
                 enemy.move_towards_player(player, grid)
@@ -720,7 +672,7 @@ def main():
                     player.move(knockback * dx / distance, knockback * dy / distance, grid)
                     if health <= 0:
                         game_over = True
-            
+
             # Drawing
             screen.fill(BLACK)
             draw_grid(grid)
@@ -728,20 +680,23 @@ def main():
             for enemy in enemies:
                 enemy.draw()
             draw_hud()
-            
+
             # Display health
             health_text = font.render(f"Health: {health}", True, WHITE)
             screen.blit(health_text, (10, 40))
-            
+
             pygame.display.flip()
             clock.tick(FPS)
             
-        # If we break out of the inner loop but not the outer one
-        if not waiting_for_restart and game_over:
-            break
+        # If we break out of the inner loop but running is still True, we continue to the next iteration of the outer loop
+        if waiting_for_restart:
+            continue
+            
+        # If the player quit (running = False) or game over without waiting for restart, we break out of the outer loop
+        break
     
     pygame.quit()
     sys.exit()
 
 if __name__ == "__main__":
-    main()  # Fix: remove the recursive call to main()
+    main()  # Start the game
