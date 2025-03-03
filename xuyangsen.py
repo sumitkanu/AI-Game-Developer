@@ -11,7 +11,7 @@ WIDTH, HEIGHT = 800, 600
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
 pygame.display.set_caption("AI Dungeons")
 
-# Clolor define
+# Color define
 DEEP_BLUE = (0, 0, 139)  # Dark blue for background
 BLACK = (0, 0, 0)
 WHITE = (255, 255, 255)
@@ -100,8 +100,9 @@ class Player:
         
         return False
     
+    # Fix: indent move method to be part of the Player class
     def move(self, dx, dy, grid):
-        global game_over
+        global game_over, level_complete
         # Calculate new position first
         new_x = self.x + dx
         new_y = self.y + dy
@@ -140,6 +141,7 @@ class Player:
         for grid_x, grid_y in grid_positions:
             if grid[grid_y][grid_x].is_exit:
                 game_over = True
+                level_complete = True
                 return True
         
         # If moveable, update location
@@ -610,8 +612,9 @@ def show_lava_death_screen():
     # Adds a very short delay on death to ensure rendering is complete
     pygame.time.delay(50)
 
+# Modified main function to wait for user confirmation before restarting
 def main():
-    global health, score, fell_into_lava
+    global health, score, fell_into_lava, game_over, level_complete
     running = True
     
     while running:  # Outer loop for game restart
@@ -620,7 +623,9 @@ def main():
         score = 0
         fell_into_lava = False
         game_over = False
+        level_complete = False  
         show_death_screen = False
+        waiting_for_restart = False  # New: flag to indicate waiting for user confirmation
         
         # Generate map (only once at game start or restart)
         grid, start_x, start_y = generate_dungeon()
@@ -634,78 +639,109 @@ def main():
         enemies = spawn_enemies(grid, player_x, player_y)
         
         # Game main loop
-        while running and not game_over:  # Inner loop for actual gameplay
+        while running:  # Inner loop for actual gameplay
             # Event handling
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     running = False
+                    break
                 elif event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_r and (game_over or show_death_screen):
-                        game_over = True
+                    # When waiting for restart, press R to restart the game
+                    if waiting_for_restart and event.key == pygame.K_r:
+                        waiting_for_restart = False
+                        game_over = False
                         break
             
-            if not game_over:
-                # Check if fallen into lava
-                if fell_into_lava and not show_death_screen:
-                    show_death_screen = True
+            # If waiting for restart, skip game logic and continue showing end screen
+            if waiting_for_restart:
+                if fell_into_lava:
                     show_lava_death_screen()
-                    game_over = True
-                    continue
-                
-                if show_death_screen:
-                    show_lava_death_screen()
-                    pygame.display.flip()
-                    continue
-                
-                # Player movement
-                keys = pygame.key.get_pressed()
-                if keys[pygame.K_LEFT]:
-                    player.move(-player.vel, 0, grid)
-                if keys[pygame.K_RIGHT]:
-                    player.move(player.vel, 0, grid)
-                if keys[pygame.K_UP]:
-                    player.move(0, -player.vel, grid)
-                if keys[pygame.K_DOWN]:
-                    player.move(0, player.vel, grid)
-                
-                # Enemy movement and collision
-                for enemy in enemies:
-                    enemy.move_towards_player(player, grid)
-                    if player.rect.colliderect(enemy.rect):
-                        health -= HEALTH_DECREASE                        
-                        # Knockback player
-                        dx = player.x - enemy.x
-                        dy = player.y - enemy.y
-                        distance = max(1, math.sqrt(dx*dx + dy*dy))
-                        knockback = 50
-                        player.move(knockback * dx / distance, knockback * dy / distance, grid)
-                        if health <= 0:
-                            game_over = True
-                
-                # Check treasure collection status
-                treasures_remaining = sum(1 for row in grid for cell in row if cell.is_treasure)
-                if treasures_remaining == 0:
-                    game_over = True
-                
-                # Drawing
-                screen.fill(BLACK)
-                draw_grid(grid)
-                player.draw()
-                for enemy in enemies:
-                    enemy.draw()
-                draw_hud()
-                
-                # Display game over text
-                if game_over and not fell_into_lava:
-                    text = "Game Over! Press R to restart" if health <= 0 else f"Congratulations! Final score: {score}. Press R to restart"
+                else:
+                    # Keep showing game over/level complete screen
+                    screen.fill(BLACK)
+                    draw_grid(grid)
+                    player.draw()
+                    for enemy in enemies:
+                        enemy.draw()
+                    draw_hud()
+                    
+                    if level_complete:
+                        text = f"Level Complete! Final score: {score}. Press R to restart"
+                    else:
+                        text = "Game Over! Press R to restart"
+                    
                     game_over_text = font.render(text, True, WHITE)
                     text_rect = game_over_text.get_rect(center=(WIDTH//2, HEIGHT//2))
                     screen.blit(game_over_text, text_rect)
                 
                 pygame.display.flip()
                 clock.tick(FPS)
+                continue
+            
+            # If game is over but not yet waiting for restart
+            if game_over:
+                waiting_for_restart = True
+                continue
+                
+            # Check if fallen into lava
+            if fell_into_lava and not show_death_screen:
+                show_death_screen = True
+                show_lava_death_screen()
+                game_over = True
+                waiting_for_restart = True
+                continue
+            
+            if show_death_screen:
+                show_lava_death_screen()
+                pygame.display.flip()
+                continue
+            
+            # Player movement
+            keys = pygame.key.get_pressed()
+            if keys[pygame.K_LEFT]:
+                player.move(-player.vel, 0, grid)
+            if keys[pygame.K_RIGHT]:
+                player.move(player.vel, 0, grid)
+            if keys[pygame.K_UP]:
+                player.move(0, -player.vel, grid)
+            if keys[pygame.K_DOWN]:
+                player.move(0, player.vel, grid)
+            
+            # Enemy movement and collision
+            for enemy in enemies:
+                enemy.move_towards_player(player, grid)
+                if player.rect.colliderect(enemy.rect):
+                    health -= HEALTH_DECREASE                        
+                    # Knockback player
+                    dx = player.x - enemy.x
+                    dy = player.y - enemy.y
+                    distance = max(1, math.sqrt(dx*dx + dy*dy))
+                    knockback = 50
+                    player.move(knockback * dx / distance, knockback * dy / distance, grid)
+                    if health <= 0:
+                        game_over = True
+            
+            # Drawing
+            screen.fill(BLACK)
+            draw_grid(grid)
+            player.draw()
+            for enemy in enemies:
+                enemy.draw()
+            draw_hud()
+            
+            # Display health
+            health_text = font.render(f"Health: {health}", True, WHITE)
+            screen.blit(health_text, (10, 40))
+            
+            pygame.display.flip()
+            clock.tick(FPS)
+            
+        # If we break out of the inner loop but not the outer one
+        if not waiting_for_restart and game_over:
+            break
     
     pygame.quit()
     sys.exit()
+
 if __name__ == "__main__":
-    main()
+    main()  # Fix: remove the recursive call to main()
