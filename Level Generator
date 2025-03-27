@@ -1,0 +1,1354 @@
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import torch.nn.functional as F
+import random
+import matplotlib.pyplot as plt
+from collections import deque, namedtuple
+
+# Define map elements
+EMPTY = 0
+WALL = 1
+LAVA = 2
+TREASURE = 3
+EXIT = 4
+START = 5
+ENEMY = 6
+
+# Define Colors for Visualization
+COLOR_MAP = {
+    EMPTY: "white",
+    WALL: "brown",
+    LAVA: "red",
+    TREASURE: "yellow",
+    EXIT: "green",
+    START: "blue",
+    ENEMY: "purple",
+}
+
+# Experience replay buffer
+Experience = namedtuple('Experience', ['state', 'action', 'reward', 'next_state', 'done'])
+
+class ReplayBuffer:
+    def __init__(self, capacity=5000):
+        self.buffer = deque(maxlen=capacity)
+
+    def push(self, state, action, reward, next_state, done):
+        self.buffer.append(Experience(state, action, reward, next_state, done))
+
+    def sample(self, batch_size):
+        experiences = random.sample(self.buffer, k=batch_size)
+        states = torch.stack([torch.tensor(e.state, dtype=torch.float) for e in experiences])
+        actions = torch.tensor([e.action for e in experiences])
+        rewards = torch.tensor([e.reward for e in experiences], dtype=torch.float)
+        next_states = torch.stack([torch.tensor(e.next_state, dtype=torch.float) for e in experiences])
+        dones = torch.tensor([e.done for e in experiences], dtype=torch.float)
+        return states, actions, rewards, next_states, dones
+
+    def __len__(self):
+        return len(self.buffer)
+
+class DQNModel(nn.Module):
+    """Lightweight Q-Network"""
+    def __init__(self, input_dim, output_dim):
+        super(DQNModel, self).__init__()
+        self.fc1 = nn.Linear(input_dim, 128)
+        self.fc2 = nn.Linear(128, 128)
+        self.fc3 = nn.Linear(128, output_dim)
+
+    def forward(self, x):
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        return self.fc3(x)
+
+class DungeonAgent:
+    """Agent that learns to generate levels"""
+    def __init__(self, state_size, action_size, seed=42):
+        self.state_size = state_size
+        self.action_size = action_size
+
+        random.seed(seed)
+        torch.manual_seed(seed)
+
+        self.qnetwork = DQNModel(state_size, action_size)
+        self.optimizer = optim.Adam(self.qnetwork.parameters(), lr=0.001)
+        self.memory = ReplayBuffer(5000)
+
+        self.batch_size = 32
+        self.gamma = 0.99
+        self.epsilon = 1.0
+        self.epsilon_decay = 0.999995
+        self.epsilon_min = 0.000001
+
+    def act(self, state, eval_mode=False):
+        """Modified to balance element types"""
+        if not eval_mode and random.random() < self.epsilon:
+            # More balanced random selection
+            if random.random() < 0.5:  # 50% chance for structured placement
+                playable_area_size = 20 * 20
+                position_idx = random.randint(0, playable_area_size - 1)
+                
+                # More balanced element distribution
+                r = random.random()
+                if r < 0.5:  # 50% chance for empty
+                    element_type = 0  # EMPTY
+                elif r < 0.8:  # 30% chance for walls
+                    element_type = 1  # WALL
+                elif r < 0.9:  # 10% chance for lava
+                    element_type = 2  # LAVA
+                else:  # 10% chance for treasure
+                    element_type = 3  # TREASURE
+                
+                action = position_idx + element_type * playable_area_size
+                return action
+            return random.randint(0, self.action_size - 1)
+
+        state = torch.tensor(state, dtype=torch.float).unsqueeze(0)
+        with torch.no_grad():
+            action_values = self.qnetwork(state)
+
+        # In evaluation mode, ensure more balanced element distribution
+        if eval_mode:
+            if random.random() < 0.3:  # 30% random exploration
+                playable_area_size = 20 * 20
+                position_idx = random.randint(0, playable_area_size - 1)
+                
+                # Balance elements
+                r = random.random()
+                if r < 0.5:  # Prioritize empty spaces
+                    element_type = 0  # EMPTY
+                elif r < 0.8:
+                    element_type = 1  # WALL
+                elif r < 0.9:
+                    element_type = 2  # LAVA
+                else:
+                    element_type = 3  # TREASURE
+                
+                action = position_idx + element_type * playable_area_size
+                return action
+
+        return torch.argmax(action_values).item()
+
+    def step(self, state, action, reward, next_state, done):
+        """Save experience & train"""
+        self.memory.push(state, action, reward, next_state, done)
+        if len(self.memory) > self.batch_size:
+            self.learn(self.memory.sample(self.batch_size))
+
+    def learn(self, experiences):
+        states, actions, rewards, next_states, dones = experiences
+
+        Q_expected = self.qnetwork(states).gather(1, actions.unsqueeze(1)).squeeze(1)
+        Q_targets = rewards + (self.gamma * self.qnetwork(next_states).max(1)[0] * (1 - dones))
+
+        loss = F.mse_loss(Q_expected, Q_targets)
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+
+        self.epsilon = max(self.epsilon_min, self.epsilon * self.epsilon_decay)
+
+    
+class DungeonEnvironment:
+    """Environment for RL-based level generation inside a fixed 20x20 board."""
+    def __init__(self, difficulty=5):
+        self.board_size = 20  # Fixed outer board size
+        self.difficulty = difficulty  # Difficulty level (1-10)
+        self.width, self.height = self._determine_playable_size()
+        self.grid = np.zeros((self.board_size, self.board_size), dtype=np.int8)
+        # Reduce steps to maintain maze style
+        self.max_steps = (self.width * self.height) * 0.3  # Only modify 30% of cells
+        self.current_step = 0
+        # Element distribution favoring walls and corridors
+        self.element_types = [WALL, WALL, WALL, EMPTY, EMPTY, WALL, TREASURE, LAVA]
+        self.start_pos = None
+        self.exit_pos = None
+
+        # Calculate playable area boundaries
+        self.playable_start_x = (self.board_size - self.width) // 2
+        self.playable_start_y = (self.board_size - self.height) // 2
+        self.playable_end_x = self.playable_start_x + self.width - 1
+        self.playable_end_y = self.playable_start_y + self.height - 1
+    
+    def _check_path_exists(self):
+        """Verify that a path exists from start to exit."""
+        if self.start_pos is None or self.exit_pos is None:
+            return True
+        
+        # Use breadth-first search
+        visited = np.zeros((self.board_size, self.board_size), dtype=bool)
+        queue = [self.start_pos]
+        visited[self.start_pos[1], self.start_pos[0]] = True
+        
+        while queue:
+            x, y = queue.pop(0)
+            
+            if (x, y) == self.exit_pos:
+                return True  # Path found
+            
+            # Check all four directions
+            for dx, dy in [(0, -1), (1, 0), (0, 1), (-1, 0)]:
+                nx, ny = x + dx, y + dy
+                
+                if (0 <= nx < self.board_size and 0 <= ny < self.board_size and
+                    not visited[ny, nx] and self.grid[ny, nx] != WALL):
+                    visited[ny, nx] = True
+                    queue.append((nx, ny))
+        
+        return False  # No path found
+
+    def _determine_playable_size(self):
+        """Determine playable area size based on difficulty"""
+        if self.difficulty <= 3:  # Easy
+            return random.randint(8, 10), random.randint(8, 10)
+        elif self.difficulty <= 7:  # Medium
+            return random.randint(12, 16), random.randint(12, 16)
+        else:  # Hard
+            return random.randint(18, 20), random.randint(18, 20)
+
+    def _generate_maze_reference(self):
+        """Generate a proper maze structure with narrow corridors and path choices."""
+        # Start with all walls
+        maze_grid = np.ones((self.board_size, self.board_size), dtype=np.int8) * WALL
+        
+        # Use improved depth-first search algorithm to generate maze
+        # Start at a random point
+        start_x = random.randint(self.playable_start_x + 1, self.playable_end_x - 1)
+        start_y = random.randint(self.playable_start_y + 1, self.playable_end_y - 1)
+        
+        # Ensure starting point has odd coordinates for better maze generation
+        if start_x % 2 == 0:
+            start_x += 1
+        if start_y % 2 == 0:
+            start_y += 1
+        
+        # Set starting cell as empty
+        maze_grid[start_y, start_x] = EMPTY
+        
+        # Store cells to visit
+        stack = [(start_x, start_y)]
+        
+        # Store visited cells to avoid revisiting
+        visited = set([(start_x, start_y)])
+        
+        # Store wall breakpoints for later loop creation
+        wall_breakpoints = []
+        
+        # Maze generation directions: up, right, down, left
+        directions = [
+            (0, -2),  # up
+            (2, 0),   # right
+            (0, 2),   # down
+            (-2, 0)   # left
+        ]
+        
+        while stack:
+            current_x, current_y = stack[-1]
+            
+            # Find all unvisited neighboring cells (with 2-unit gaps for walls)
+            neighbors = []
+            for dx, dy in directions:
+                nx, ny = current_x + dx, current_y + dy
+                
+                # Ensure within playable area and not visited
+                if (self.playable_start_x < nx < self.playable_end_x and 
+                    self.playable_start_y < ny < self.playable_end_y and
+                    (nx, ny) not in visited):
+                    neighbors.append((nx, ny, dx, dy))
+            
+            if neighbors:
+                # Randomly choose an unvisited neighbor
+                nx, ny, dx, dy = random.choice(neighbors)
+                
+                # Mark wall position for potential loop creation later
+                wall_x, wall_y = current_x + dx//2, current_y + dy//2
+                wall_breakpoints.append((wall_x, wall_y))
+                
+                # Carve through the wall
+                maze_grid[wall_y, wall_x] = EMPTY
+                
+                # Mark new cell as empty
+                maze_grid[ny, nx] = EMPTY
+                
+                # Add new cell to visited set
+                visited.add((nx, ny))
+                
+                # Push onto stack to continue exploration
+                stack.append((nx, ny))
+            else:
+                # If no unvisited neighbors, backtrack
+                stack.pop()
+        
+        # Ensure borders are walls
+        for y in range(self.board_size):
+            for x in range(self.board_size):
+                if y < self.playable_start_y or y > self.playable_end_y or x < self.playable_start_x or x > self.playable_end_x:
+                    maze_grid[y, x] = WALL
+        
+        # Add some loops to make maze more interesting (not every wall is removed to maintain complexity)
+        # Larger mazes get more loops
+        num_loops = int(min(len(wall_breakpoints) * 0.10, (self.width + self.height) / 8))
+        
+        if wall_breakpoints:
+            for _ in range(num_loops):
+                if not wall_breakpoints:
+                    break
+                    
+                # Randomly select a wall to break
+                idx = random.randint(0, len(wall_breakpoints) - 1)
+                wx, wy = wall_breakpoints.pop(idx)
+                
+                # Ensure not a border wall
+                if (self.playable_start_x < wx < self.playable_end_x and 
+                    self.playable_start_y < wy < self.playable_end_y):
+                    maze_grid[wy, wx] = EMPTY
+        
+        return maze_grid
+    
+    def _widen_corridors(self):
+        """Selectively widen some corridors while maintaining maze character."""
+        # Save all potential expansion points
+        potential_expansions = []
+        
+        # Find all empty cells
+        for y in range(self.playable_start_y + 1, self.playable_end_y):
+            for x in range(self.playable_start_x + 1, self.playable_end_x):
+                if self.grid[y, x] == EMPTY:
+                    # Check adjacent walls
+                    for dx, dy in [(0, -1), (1, 0), (0, 1), (-1, 0)]:
+                        nx, ny = x + dx, y + dy
+                        if (self.playable_start_x < nx < self.playable_end_x and 
+                            self.playable_start_y < ny < self.playable_end_y and
+                            self.grid[ny, nx] == WALL):
+                            potential_expansions.append((nx, ny))
+        
+        # Randomly select a small number of points to expand (about 15% of potential expansion points)
+        num_expansions = int(len(potential_expansions) * 0.15)
+        if potential_expansions and num_expansions > 0:
+            expansions = random.sample(potential_expansions, min(num_expansions, len(potential_expansions)))
+            for x, y in expansions:
+                # Check if removing the wall would break connectivity
+                self.grid[y, x] = EMPTY
+                
+                # If it breaks connectivity, restore wall
+                if not self._check_path_exists():
+                    self.grid[y, x] = WALL
+
+    def _add_lava_and_treasure(self):
+        """Add appropriate amounts of lava and treasure to the maze."""
+        empty_cells = []
+        for y in range(self.playable_start_y + 1, self.playable_end_y):
+            for x in range(self.playable_start_x + 1, self.playable_end_x):
+                if self.grid[y, x] == EMPTY:
+                    empty_cells.append((x, y))
+        
+        # Shuffle empty cells list
+        random.shuffle(empty_cells)
+        
+        # Calculate total playable area size
+        total_playable_cells = (self.width - 2) * (self.height - 2)
+        
+        # Allocate cells for lava and treasure
+        lava_percentage = 0.03 + (self.difficulty * 0.005)  # 3-8%
+        treasure_percentage = 0.02 + (self.difficulty * 0.002)  # 2-4%
+        
+        lava_count = int(total_playable_cells * lava_percentage)
+        treasure_count = int(total_playable_cells * treasure_percentage)
+        
+        # Set min and max counts
+        lava_count = max(2, min(lava_count, 15))
+        treasure_count = max(2, min(treasure_count, 8))
+        
+        # Add lava
+        lava_added = 0
+        for x, y in empty_cells:
+            if lava_added >= lava_count:
+                break
+                
+            # Don't place lava near start/exit
+            too_close_to_start = abs(x - self.start_pos[0]) + abs(y - self.start_pos[1]) < 4
+            too_close_to_exit = abs(x - self.exit_pos[0]) + abs(y - self.exit_pos[1]) < 4
+            
+            if not too_close_to_start and not too_close_to_exit:
+                self.grid[y, x] = LAVA
+                
+                # Ensure valid path still exists
+                if not self._check_path_exists():
+                    self.grid[y, x] = EMPTY
+                    continue
+                    
+                lava_added += 1
+        
+        # Recollect empty cells (after lava placement)
+        empty_cells = []
+        for y in range(self.playable_start_y + 1, self.playable_end_y):
+            for x in range(self.playable_start_x + 1, self.playable_end_x):
+                if self.grid[y, x] == EMPTY:
+                    empty_cells.append((x, y))
+        
+        random.shuffle(empty_cells)
+        
+        # Add treasure
+        treasure_added = 0
+        for x, y in empty_cells:
+            if treasure_added >= treasure_count:
+                break
+                
+            # Treasure can be placed on any empty cell
+            self.grid[y, x] = TREASURE
+            treasure_added += 1
+
+    def reset(self):
+        """Reset and generate a maze-style dungeon."""
+        # Set all to walls
+        self.grid = np.ones((self.board_size, self.board_size), dtype=np.int8) * WALL
+        
+        # Generate maze structure
+        self.maze_reference = self._generate_maze_reference()
+        self.grid = np.copy(self.maze_reference)
+        
+        # Place start and exit
+        self.start_pos, self.exit_pos = self._place_start_and_exit()
+        
+        # Ensure path exists
+        if not self._check_path_exists():
+            self._carve_path_between(self.start_pos, self.exit_pos)
+        
+        # Selectively widen some corridors, but not too many
+        self._widen_corridors()
+        
+        # Add lava and treasure
+        self._add_lava_and_treasure()
+        
+        # Add some enemies
+        self._place_enemies()
+        
+        # Final path verification
+        if not self._check_path_exists():
+            self._carve_path_between(self.start_pos, self.exit_pos)
+        
+        self.current_step = 0
+        return self._get_state()
+
+    def _create_additional_pathways(self):
+        """Create additional pathways to improve playability."""
+        # Number of additional paths scales with difficulty and map size
+        num_paths = max(2, min(8, int((self.width + self.height) / 8)))
+        
+        for _ in range(num_paths):
+            # Choose random points that are not too close to each other
+            while True:
+                x1 = random.randint(self.playable_start_x + 2, self.playable_end_x - 2)
+                y1 = random.randint(self.playable_start_y + 2, self.playable_end_y - 2)
+                
+                x2 = random.randint(self.playable_start_x + 2, self.playable_end_x - 2)
+                y2 = random.randint(self.playable_start_y + 2, self.playable_end_y - 2)
+                
+                # Ensure points are far enough apart
+                if abs(x1 - x2) + abs(y1 - y2) >= 6:
+                    break
+            
+            # Carve a path between these points
+            self._carve_path_between((x1, y1), (x2, y2))
+
+    def _widen_corridors(self):
+        """Widen some corridors to improve movement options."""
+        # Find empty cells that are part of corridors
+        for y in range(self.playable_start_y + 1, self.playable_end_y):
+            for x in range(self.playable_start_x + 1, self.playable_end_x):
+                if self.grid[y, x] == EMPTY:
+                    # Count adjacent walls
+                    wall_count = sum(1 for dx, dy in [(0, -1), (1, 0), (0, 1), (-1, 0)]
+                                    if 0 <= x+dx < self.board_size and 0 <= y+dy < self.board_size
+                                    and self.grid[y+dy, x+dx] == WALL)
+                    
+                    # If this is a narrow corridor (has 2-3 adjacent walls)
+                    if wall_count >= 2 and random.random() < 0.4:
+                        # Try to widen by removing one adjacent wall
+                        directions = [(0, -1), (1, 0), (0, 1), (-1, 0)]
+                        random.shuffle(directions)
+                        
+                        for dx, dy in directions:
+                            nx, ny = x + dx, y + dy
+                            if (self.playable_start_x < nx < self.playable_end_x and 
+                                self.playable_start_y < ny < self.playable_end_y and
+                                self.grid[ny, nx] == WALL):
+                                # Remove this wall
+                                self.grid[ny, nx] = EMPTY
+                                break
+
+    def _create_pathways(self):
+        """Create some connected paths to ensure some navigability."""
+        # Choose a random starting point
+        start_x = random.randint(self.playable_start_x + 1, self.playable_end_x - 1)
+        start_y = random.randint(self.playable_start_y + 1, self.playable_end_y - 1)
+        
+        # Create a few random paths
+        for _ in range(3):
+            x, y = start_x, start_y
+            for _ in range(random.randint(5, 10)):
+                self.grid[y, x] = EMPTY  # Ensure path is walkable
+                dx, dy = random.choice([(0, 1), (1, 0), (0, -1), (-1, 0)])
+                nx, ny = x + dx, y + dy
+                if (self.playable_start_x < nx < self.playable_end_x and 
+                    self.playable_start_y < ny < self.playable_end_y):
+                    x, y = nx, ny
+
+    def _carve_paths(self):
+        """Carve guaranteed paths through the dungeon using a modified depth-first search."""
+        if not self.start_pos or not self.exit_pos:
+            return
+            
+        # Create a path from start to exit
+        self._carve_path_between(self.start_pos, self.exit_pos)
+        
+        # Add some branching paths for exploration (2-4 branches)
+        num_branches = random.randint(2, 4)
+        open_cells = []
+        
+        # Find valid starting points for branches
+        for y in range(self.playable_start_y + 1, self.playable_end_y):
+            for x in range(self.playable_start_x + 1, self.playable_end_x):
+                if self.grid[y, x] == EMPTY:
+                    # Check if this is an "open" cell with at least one adjacent wall
+                    adjacent_walls = sum(self.grid[y+dy, x+dx] == WALL
+                                    for dx, dy in [(0, -1), (1, 0), (0, 1), (-1, 0)]
+                                    if 0 <= x+dx < self.board_size and 0 <= y+dy < self.board_size)
+                    if adjacent_walls > 0:
+                        open_cells.append((x, y))
+        
+        # Create branching paths
+        for _ in range(min(num_branches, len(open_cells))):
+            if not open_cells:
+                break
+                
+            start_pos = random.choice(open_cells)
+            open_cells.remove(start_pos)
+            
+            # Find a destination that's at least 5 tiles away
+            while True:
+                dest_x = random.randint(self.playable_start_x + 1, self.playable_end_x - 1)
+                dest_y = random.randint(self.playable_start_y + 1, self.playable_end_y - 1)
+                if abs(dest_x - start_pos[0]) + abs(dest_y - start_pos[1]) >= 5:
+                    break
+                    
+            self._carve_path_between(start_pos, (dest_x, dest_y))
+
+    def _carve_path_between(self, start, end):
+        """Ensure a path exists between two points, but make it winding to maintain maze character."""
+        x, y = start
+        end_x, end_y = end
+        
+        # Use A* algorithm to find path
+        open_set = [(0, x, y, [])]  # (priority, x, y, path)
+        closed_set = set()
+        
+        while open_set:
+            # Sort by priority
+            open_set.sort()
+            _, x, y, path = open_set.pop(0)
+            
+            # If reached end
+            if (x, y) == end:
+                # Create path
+                for px, py in path:
+                    self.grid[py, px] = EMPTY
+                return
+            
+            # Add current point to visited set
+            closed_set.add((x, y))
+            
+            # Check four directions
+            for dx, dy in [(0, -1), (1, 0), (0, 1), (-1, 0)]:
+                nx, ny = x + dx, y + dy
+                
+                # Ensure within playable area and not visited
+                if (self.playable_start_x <= nx <= self.playable_end_x and 
+                    self.playable_start_y <= ny <= self.playable_end_y and 
+                    (nx, ny) not in closed_set):
+                    
+                    # Calculate Manhattan distance as heuristic
+                    h = abs(nx - end_x) + abs(ny - end_y)
+                    
+                    # Add some randomness to make path more interesting
+                    h += random.randint(0, 1)
+                    
+                    # Add to open set
+                    new_path = path + [(nx, ny)]
+                    open_set.append((h, nx, ny, new_path))
+        
+        # If no path found (shouldn't happen), create direct path
+        x, y = start
+        while (x, y) != end:
+            dx = 1 if x < end_x else -1 if x > end_x else 0
+            dy = 1 if y < end_y else -1 if y > end_y else 0
+            
+            x += dx
+            y += dy
+            
+            if self.playable_start_x <= x <= self.playable_end_x and self.playable_start_y <= y <= self.playable_end_y:
+                self.grid[y, x] = EMPTY
+
+    def _place_start_and_exit(self):
+        """Place start and exit at opposite ends of the maze."""
+        # Find all possible start positions (near edges)
+        possible_starts = []
+        possible_exits = []
+        
+        # Check near top and bottom edges
+        for x in range(self.playable_start_x + 1, self.playable_end_x):
+            # Near top edge
+            for y in range(self.playable_start_y + 1, self.playable_start_y + 3):
+                if self.grid[y, x] == EMPTY:
+                    possible_starts.append((x, y))
+            
+            # Near bottom edge
+            for y in range(self.playable_end_y - 2, self.playable_end_y):
+                if self.grid[y, x] == EMPTY:
+                    possible_exits.append((x, y))
+        
+        # Check near left and right edges
+        for y in range(self.playable_start_y + 3, self.playable_end_y - 2):
+            # Near left edge
+            for x in range(self.playable_start_x + 1, self.playable_start_x + 3):
+                if self.grid[y, x] == EMPTY:
+                    possible_starts.append((x, y))
+            
+            # Near right edge
+            for x in range(self.playable_end_x - 2, self.playable_end_x):
+                if self.grid[y, x] == EMPTY:
+                    possible_exits.append((x, y))
+        
+        # If not enough candidates found, create some
+        if not possible_starts:
+            x = self.playable_start_x + 1
+            y = self.playable_start_y + 1
+            self.grid[y, x] = EMPTY
+            possible_starts.append((x, y))
+        
+        if not possible_exits:
+            x = self.playable_end_x - 1
+            y = self.playable_end_y - 1
+            self.grid[y, x] = EMPTY
+            possible_exits.append((x, y))
+        
+        # Randomly select start and exit points, trying to maximize distance
+        best_distance = 0
+        best_start = None
+        best_exit = None
+        
+        # Try several times to find the farthest start/exit combination
+        for _ in range(min(10, len(possible_starts) * len(possible_exits))):
+            start = random.choice(possible_starts)
+            exit_point = random.choice(possible_exits)
+            
+            distance = abs(start[0] - exit_point[0]) + abs(start[1] - exit_point[1])
+            
+            if distance > best_distance:
+                best_distance = distance
+                best_start = start
+                best_exit = exit_point
+        
+        # If no good combination found, use any combination
+        if best_start is None or best_exit is None:
+            if possible_starts and possible_exits:
+                best_start = possible_starts[0]
+                best_exit = possible_exits[0]
+            else:
+                # Last resort: manually create start and exit
+                best_start = (self.playable_start_x + 1, self.playable_start_y + 1)
+                best_exit = (self.playable_end_x - 1, self.playable_end_y - 1)
+                self.grid[best_start[1], best_start[0]] = EMPTY
+                self.grid[best_exit[1], best_exit[0]] = EMPTY
+        
+        # Set start and exit positions
+        self.grid[best_start[1], best_start[0]] = START
+        self.grid[best_exit[1], best_exit[0]] = EXIT
+        
+        # Clear around start and exit to ensure they're not walled in
+        for dx in [-1, 0, 1]:
+            for dy in [-1, 0, 1]:
+                if dx == 0 and dy == 0:
+                    continue
+                
+                sx, sy = best_start[0] + dx, best_start[1] + dy
+                ex, ey = best_exit[0] + dx, best_exit[1] + dy
+                
+                # Ensure at least one direction is open
+                if (0 <= sx < self.board_size and 0 <= sy < self.board_size and 
+                    self.grid[sy, sx] == WALL):
+                    if random.random() < 0.5:  # 50% chance to clear
+                        self.grid[sy, sx] = EMPTY
+                
+                if (0 <= ex < self.board_size and 0 <= ey < self.board_size and 
+                    self.grid[ey, ex] == WALL):
+                    if random.random() < 0.5:  # 50% chance to clear
+                        self.grid[ey, ex] = EMPTY
+        
+        return best_start, best_exit
+    
+
+    def _calculate_path_complexity(self):
+        """Calculate path complexity based on how many paths exist and their lengths."""
+        # Perform BFS from start position
+        visited = np.zeros((self.board_size, self.board_size), dtype=bool)
+        queue = [(self.start_pos, 0)]  # (position, distance)
+        visited[self.start_pos[1], self.start_pos[0]] = True
+        path_lengths = []
+
+        while queue:
+            (x, y), dist = queue.pop(0)
+
+            # If reached exit, store path length
+            if (x, y) == self.exit_pos:
+                path_lengths.append(dist)
+                continue
+
+            # Explore all four directions
+            for dx, dy in [(0, -1), (1, 0), (0, 1), (-1, 0)]:
+                nx, ny = x + dx, y + dy
+
+                if (0 <= nx < self.board_size and 0 <= ny < self.board_size and
+                    not visited[ny, nx] and self.grid[ny, nx] != WALL):
+                    visited[ny, nx] = True
+                    queue.append(((nx, ny), dist + 1))
+
+        # Path Complexity Calculation
+        if not path_lengths:
+            return 0  # No valid paths = no complexity
+
+        # Complexity = Average path length scaled by grid size
+        avg_path_length = sum(path_lengths) / len(path_lengths)
+        normalized_complexity = avg_path_length / (self.width + self.height)
+
+        return normalized_complexity  # Returns value between 0-1
+
+    def _place_enemies(self):
+            """Place enemies, preferring corridor corners"""
+            # Determine enemy count based on difficulty
+            if self.difficulty < 3:
+                max_enemies = 0  # No enemies at easy difficulty
+            else:
+                max_enemies = min(self.difficulty - 1, 6)  # 2-6 enemies
+            
+            # Find suitable enemy locations (corners or dead ends)
+            potential_spots = []
+            
+            for y in range(self.playable_start_y + 1, self.playable_end_y):
+                for x in range(self.playable_start_x + 1, self.playable_end_x):
+                    if self.grid[y, x] == EMPTY:
+                        # Count adjacent walls
+                        wall_count = 0
+                        for dx, dy in [(0, -1), (1, 0), (0, 1), (-1, 0)]:
+                            nx, ny = x + dx, y + dy
+                            if (0 <= nx < self.board_size and 0 <= ny < self.board_size and 
+                                self.grid[ny, nx] == WALL):
+                                wall_count += 1
+                        
+                        # If corner (2 walls) or dead end (3 walls)
+                        if wall_count >= 2:
+                            # Avoid start and exit points
+                            too_close_to_start = abs(x - self.start_pos[0]) + abs(y - self.start_pos[1]) < 5
+                            too_close_to_exit = abs(x - self.exit_pos[0]) + abs(y - self.exit_pos[1]) < 5
+                            
+                            if not too_close_to_start and not too_close_to_exit:
+                                potential_spots.append((x, y))
+            
+            # Randomly select locations to place enemies
+            enemy_count = 0
+            random.shuffle(potential_spots)
+            
+            for x, y in potential_spots:
+                if enemy_count >= max_enemies:
+                    break
+                    
+                self.grid[y, x] = ENEMY
+                enemy_count += 1
+
+
+    def _ensure_wall_density(self):
+            """Ensure proper wall density for maze-like dungeons"""
+            wall_count = np.sum(self.grid == WALL)
+            total_playable_cells = (self.width - 2) * (self.height - 2)  # Excluding border
+            
+            # Maze style needs higher wall percentage
+            target_wall_percentage = 0.45 + (self.difficulty * 0.01)  # 45%-55% walls
+            
+            current_wall_percentage = wall_count / total_playable_cells
+            
+            # If too few walls, add more
+            if current_wall_percentage < target_wall_percentage:
+                cells_to_add = int((target_wall_percentage - current_wall_percentage) * total_playable_cells)
+                
+                # Find cells where walls can be added
+                empty_cells = []
+                for y in range(self.playable_start_y + 1, self.playable_end_y):
+                    for x in range(self.playable_start_x + 1, self.playable_end_x):
+                        if self.grid[y, x] == EMPTY:
+                            # Check if adding wall won't break path
+                            self.grid[y, x] = WALL
+                            if self._check_path_exists():
+                                empty_cells.append((x, y))
+                            # Restore to empty
+                            self.grid[y, x] = EMPTY
+                
+                # Randomly select cells to add walls
+                if empty_cells:
+                    cells_to_add = min(cells_to_add, len(empty_cells))
+                    for x, y in random.sample(empty_cells, cells_to_add):
+                        self.grid[y, x] = WALL
+            
+            # If too many walls, remove some
+            elif current_wall_percentage > target_wall_percentage + 0.15:
+                cells_to_remove = int((current_wall_percentage - target_wall_percentage) * total_playable_cells)
+                
+                # Find removable walls
+                wall_cells = []
+                for y in range(self.playable_start_y + 1, self.playable_end_y):
+                    for x in range(self.playable_start_x + 1, self.playable_end_x):
+                        if self.grid[y, x] == WALL:
+                            # Try removing wall to see if it causes too much open space
+                            self.grid[y, x] = EMPTY
+                            
+                            # Check if removing wall maintains maze character
+                            # Count nearby walls
+                            nearby_walls = 0
+                            for dx, dy in [(0, -1), (1, 0), (0, 1), (-1, 0)]:
+                                nx, ny = x + dx, y + dy
+                                if (0 <= nx < self.board_size and 0 <= ny < self.board_size and 
+                                    self.grid[ny, nx] == WALL):
+                                    nearby_walls += 1
+                            
+                            # If removing still leaves some walls to maintain maze structure
+                            if nearby_walls >= 1:
+                                wall_cells.append((x, y))
+                            
+                            # Restore wall
+                            self.grid[y, x] = WALL
+                
+                # Randomly select walls to remove
+                if wall_cells:
+                    cells_to_remove = min(cells_to_remove, len(wall_cells))
+                    for x, y in random.sample(wall_cells, cells_to_remove):
+                        self.grid[y, x] = EMPTY
+
+    def _ensure_lava_density(self):
+        """Ensure appropriate lava density, mainly placed at corners or corridor midpoints."""
+        lava_count = np.sum(self.grid == LAVA)
+        total_playable_cells = (self.width - 2) * (self.height - 2)
+        
+        # Less lava for maze style
+        target_lava_percentage = 0.02 + (self.difficulty * 0.003)  # 2%-5% lava
+        
+        current_lava_percentage = lava_count / total_playable_cells
+        
+        # If too little lava, add more
+        if current_lava_percentage < target_lava_percentage:
+            cells_to_add = int((target_lava_percentage - current_lava_percentage) * total_playable_cells)
+            
+            # Find suitable lava placement locations
+            potential_spots = []
+            
+            for y in range(self.playable_start_y + 1, self.playable_end_y):
+                for x in range(self.playable_start_x + 1, self.playable_end_x):
+                    if self.grid[y, x] == EMPTY:
+                        # Don't place near start or exit
+                        too_close_to_start = self.start_pos and abs(x - self.start_pos[0]) + abs(y - self.start_pos[1]) < 4
+                        too_close_to_exit = self.exit_pos and abs(x - self.exit_pos[0]) + abs(y - self.exit_pos[1]) < 4
+                        
+                        if not too_close_to_start and not too_close_to_exit:
+                            # Temporarily place lava
+                            self.grid[y, x] = LAVA
+                            
+                            # Check if it doesn't break path
+                            if self._check_path_exists():
+                                potential_spots.append((x, y))
+                            
+                            # Restore to empty
+                            self.grid[y, x] = EMPTY
+            
+            # Randomly select locations for lava
+            if potential_spots:
+                cells_to_add = min(cells_to_add, len(potential_spots))
+                for x, y in random.sample(potential_spots, cells_to_add):
+                    self.grid[y, x] = LAVA
+                    
+        # If too much lava, remove some
+        elif current_lava_percentage > target_lava_percentage + 0.05:
+            cells_to_remove = int((current_lava_percentage - target_lava_percentage) * total_playable_cells)
+            
+            # Find all lava cells
+            lava_cells = []
+            for y in range(self.playable_start_y + 1, self.playable_end_y):
+                for x in range(self.playable_start_x + 1, self.playable_end_x):
+                    if self.grid[y, x] == LAVA:
+                        lava_cells.append((x, y))
+            
+            # Randomly select lava to remove
+            if lava_cells:
+                cells_to_remove = min(cells_to_remove, len(lava_cells))
+                for x, y in random.sample(lava_cells, cells_to_remove):
+                    self.grid[y, x] = EMPTY
+
+    def _count_distinct_paths(self):
+        """Count how many distinct paths exist between start and exit."""
+        if not self.start_pos or not self.exit_pos:
+            return 0
+            
+        # Create a copy of the grid for path counting
+        grid_copy = np.copy(self.grid)
+        distinct_paths = 0
+        
+        # Try to find up to 5 distinct paths
+        for _ in range(5):
+            # Check if a path exists
+            if self._check_path_exists_on_grid(grid_copy):
+                distinct_paths += 1
+                
+                # Find a path
+                path = self._find_path(grid_copy)
+                
+                # Block part of this path to force finding a different one
+                if path and len(path) > 2:
+                    # Block a random segment of the path (not start or exit)
+                    block_idx = random.randint(1, len(path) - 2)
+                    x, y = path[block_idx]
+                    grid_copy[y, x] = WALL
+            else:
+                break
+                
+        return distinct_paths
+    
+    def _find_path(self, grid):
+        """Find a path from start to exit on the given grid."""
+        if not self.start_pos or not self.exit_pos:
+            return []
+            
+        # Use BFS to find a path
+        visited = np.zeros((self.board_size, self.board_size), dtype=bool)
+        queue = [(self.start_pos, [self.start_pos])]  # (position, path)
+        visited[self.start_pos[1], self.start_pos[0]] = True
+        
+        while queue:
+            (x, y), path = queue.pop(0)
+            
+            if (x, y) == self.exit_pos:
+                return path
+                
+            for dx, dy in [(0, -1), (1, 0), (0, 1), (-1, 0)]:
+                nx, ny = x + dx, y + dy
+                
+                if (0 <= nx < self.board_size and 0 <= ny < self.board_size and
+                    not visited[ny, nx] and grid[ny, nx] != WALL):
+                    visited[ny, nx] = True
+                    queue.append(((nx, ny), path + [(nx, ny)]))
+                    
+        return []
+    
+    def _check_path_exists_on_grid(self, grid):
+        """Check if a path exists on the given grid."""
+        if not self.start_pos or not self.exit_pos:
+            return True
+            
+        visited = np.zeros((self.board_size, self.board_size), dtype=bool)
+        queue = [self.start_pos]
+        visited[self.start_pos[1], self.start_pos[0]] = True
+        
+        while queue:
+            x, y = queue.pop(0)
+            
+            if (x, y) == self.exit_pos:
+                return True
+                
+            for dx, dy in [(0, -1), (1, 0), (0, 1), (-1, 0)]:
+                nx, ny = x + dx, y + dy
+                
+                if (0 <= nx < self.board_size and 0 <= ny < self.board_size and
+                    not visited[ny, nx] and grid[ny, nx] != WALL):
+                    visited[ny, nx] = True
+                    queue.append((nx, ny))
+                    
+        return False
+
+    def step(self, action):
+        """Modify grid based on action, ensuring placement inside playable area."""
+        self.current_step += 1
+        reward = 0
+        done = False
+
+        # Fixing action mapping to only affect the playable area
+        playable_area_size = self.width * self.height
+        position_idx = action % playable_area_size  # Restrict actions to playable cells
+        element_type = self.element_types[action % len(self.element_types)]
+
+        # Compute (x, y) inside playable area
+        relative_x = position_idx % self.width
+        relative_y = position_idx // self.width
+        x = self.playable_start_x + relative_x
+        y = self.playable_start_y + relative_y
+
+        if x == self.playable_start_x or x == self.playable_end_x or y == self.playable_start_y or y == self.playable_end_y:
+            return self._get_state(), 0, False  # No change, no reward
+
+        # Prevent modifying start or exit
+        if (x, y) == self.start_pos or (x, y) == self.exit_pos:
+            reward += 1  # Small reward for avoiding modification here
+        else:
+            old_element = self.grid[y, x]
+            self.grid[y, x] = element_type  # Place the selected element
+            
+            # Base reward for modifying a tile
+            reward += 5
+            
+            # Extra rewards based on element type
+            if element_type == WALL:
+                # Reward walls next to other walls (encourages corridors)
+                adjacent_walls = sum(self.grid[y+dy, x+dx] == WALL
+                                    for dx, dy in [(0, -1), (1, 0), (0, 1), (-1, 0)]
+                                    if 0 <= x+dx < self.board_size and 0 <= y+dy < self.board_size)
+
+                # Reduced reward for walls to avoid excessive wall placement
+                reward += 15 + (adjacent_walls * 5)  
+
+                # Lowered ideal wall percentage for better playability
+                wall_count = np.sum(self.grid == WALL)
+                ideal_wall_percentage = 0.3 + (self.difficulty * 0.01)  # 30-40% based on difficulty
+                current_wall_ratio = wall_count / (self.width * self.height)
+
+                if current_wall_ratio <= ideal_wall_percentage + 0.05:
+                    reward += 25  # Bonus for balanced wall placement
+                elif current_wall_ratio > ideal_wall_percentage + 0.1:
+                    reward -= 15  # Penalize excessive walls more strongly
+            
+            elif element_type == LAVA:
+                # Reduced reward for lava to avoid excessive hazards
+                reward += 15
+                
+                # Check if lava is too close to start or exit
+                too_close_to_start = abs(x - self.start_pos[0]) + abs(y - self.start_pos[1]) < 5
+                too_close_to_exit = abs(x - self.exit_pos[0]) + abs(y - self.exit_pos[1]) < 5
+                
+                if too_close_to_start or too_close_to_exit:
+                    reward -= 20  # Discourage lava near start/exit
+                
+                # Reward lava next to walls (creates hazardous paths)
+                adjacent_walls = sum(self.grid[y+dy, x+dx] == WALL
+                                    for dx, dy in [(0, -1), (1, 0), (0, 1), (-1, 0)]
+                                    if 0 <= x+dx < self.board_size and 0 <= y+dy < self.board_size)
+                reward += adjacent_walls * 3
+                
+            elif element_type == TREASURE:
+                reward += 20  # Increased reward for treasure
+                
+                # More reward if treasure is accessible (not surrounded by hazards)
+                adjacent_hazards = sum(self.grid[y+dy, x+dx] in [WALL, LAVA]
+                                      for dx, dy in [(0, -1), (1, 0), (0, 1), (-1, 0)]
+                                      if 0 <= x+dx < self.board_size and 0 <= y+dy < self.board_size)
+                
+                if adjacent_hazards <= 2:  # Accessible treasure
+                    reward += 10
+                
+            elif element_type == EMPTY:
+                # Reward creating open spaces when there are too many walls
+                wall_count = np.sum(self.grid == WALL)
+                current_wall_ratio = wall_count / (self.width * self.height)
+                ideal_wall_percentage = 0.3 + (self.difficulty * 0.01)
+                
+                if current_wall_ratio > ideal_wall_percentage + 0.1:
+                    reward += 15  # Reward removing walls when there are too many
+            
+            # Higher penalty for breaking connectivity
+            if element_type in [WALL, LAVA] and self.start_pos and self.exit_pos:
+                if not self._check_path_exists():
+                    self.grid[y, x] = old_element  # Revert change
+                    reward -= 50  # Higher penalty for breaking connectivity
+
+        # More balanced penalty for empty spaces
+        empty_tiles = np.sum(self.grid == EMPTY)
+        total_tiles = self.width * self.height
+        empty_ratio = empty_tiles / total_tiles
+        
+        # Target empty ratio based on difficulty (higher for easier levels)
+        target_empty_ratio = 0.5 - (self.difficulty * 0.02)  # 50% to 30%
+        
+        # Less severe penalty for deviation
+        if abs(empty_ratio - target_empty_ratio) > 0.15:
+            reward -= 15
+        
+        # End of Episode Bonus and Final Processing
+        if self.current_step >= self.max_steps:
+            done = True
+            
+            # Ensure there's a clear path between start and exit
+            if not self._check_path_exists():
+                self._carve_path_between(self.start_pos, self.exit_pos)
+            
+            # Widen corridors for better playability
+            self._widen_corridors()
+            
+            # Apply post-processing to ensure wall and lava density
+            self._ensure_wall_density()
+            self._ensure_lava_density()
+            
+            # Add more treasure if there's not enough
+            treasure_count = np.sum(self.grid == TREASURE)
+            if treasure_count < 3:
+                for _ in range(3 - treasure_count):
+                    for attempts in range(20):
+                        x = random.randint(self.playable_start_x + 1, self.playable_end_x - 1)
+                        y = random.randint(self.playable_start_y + 1, self.playable_end_y - 1)
+                        if self.grid[y, x] == EMPTY:
+                            self.grid[y, x] = TREASURE
+                            break
+            
+            # Calculate final reward based on playability metrics
+            path_complexity = self._calculate_path_complexity()
+            reward += path_complexity * 50  # Reward for complex paths
+            
+            # Check if multiple paths exist between start and exit
+            num_paths = self._count_distinct_paths()
+            reward += num_paths * 30  # Reward for multiple possible paths
+            
+            # Final balance check
+            wall_ratio = np.sum(self.grid == WALL) / total_tiles
+            lava_ratio = np.sum(self.grid == LAVA) / total_tiles
+            empty_ratio = np.sum(self.grid == EMPTY) / total_tiles
+            
+            # More playable target ratios
+            target_wall = 0.3 + (self.difficulty * 0.01)  # 30-40%
+            target_lava = 0.05 + (self.difficulty * 0.005)  # 5-10%
+            target_empty = 0.5 - (self.difficulty * 0.015)  # 50-35%
+            
+            # Reward based on balanced element distribution
+            wall_score = 100 - abs(wall_ratio - target_wall) * 200
+            lava_score = 100 - abs(lava_ratio - target_lava) * 200
+            empty_score = 100 - abs(empty_ratio - target_empty) * 200
+            
+            reward += (wall_score + lava_score + empty_score) / 3
+
+        return self._get_state(), reward, done
+
+    def _get_state(self):
+        return self.grid.flatten().astype(np.float32)
+
+def train_dungeon_generator(num_episodes=1000, model_path="dungeon_rl_model.pth"):
+    """Train a single RL model to generate levels for all difficulties with improved rewards"""
+    envs = {d: DungeonEnvironment(d) for d in range(1, 11)}  # One environment per difficulty
+    agent = DungeonAgent(state_size=20 * 20, action_size=20 * 20 * len(envs[1].element_types))
+    
+    # Track metrics for monitoring training progress
+    avg_rewards = []
+    training_difficulties = []
+
+    for episode in range(num_episodes):
+        # Cycle through all difficulties to ensure balanced training
+        difficulty = (episode % 10) + 1
+        env = envs[difficulty]  # Use environment for chosen difficulty
+        state = env.reset()
+        done = False
+        episode_reward = 0
+
+        while not done:
+            action = agent.act(state)
+            next_state, reward, done = env.step(action)
+            agent.step(state, action, reward, next_state, done)
+            state = next_state
+            episode_reward += reward
+
+        # Track metrics
+        avg_rewards.append(episode_reward)
+        training_difficulties.append(difficulty)
+
+        # Periodically test and print status
+        if episode % 50 == 0 or episode == num_episodes - 1:
+            last_100_avg = np.mean(avg_rewards[-100:]) if len(avg_rewards) >= 100 else np.mean(avg_rewards)
+            print(f"Episode {episode}, Epsilon: {agent.epsilon:.4f}, Difficulty: {difficulty}, Avg Reward: {last_100_avg:.1f}")
+            
+            # Every 200 episodes, test on all difficulties
+            if episode % 200 == 0 and episode > 0:
+                test_scores = []
+                
+                for test_diff in range(1, 11):
+                    test_env = envs[test_diff]
+                    test_state = test_env.reset()
+                    test_done = False
+                    test_reward = 0
+                    
+                    while not test_done:
+                        test_action = agent.act(test_state, eval_mode=True)
+                        test_state, reward, test_done = test_env.step(test_action)
+                        test_reward += reward
+                    
+                    test_scores.append(test_reward)
+                    print(f"  Test Difficulty {test_diff}: Reward {test_reward:.1f}")
+                
+                print(f"  Overall Test Avg: {np.mean(test_scores):.1f}")
+
+    torch.save(agent.qnetwork.state_dict(), model_path)
+    print(f"Model saved to {model_path}")
+    
+    # Plot training progress
+    plt.figure(figsize=(12, 6))
+    plt.subplot(1, 2, 1)
+    plt.plot(avg_rewards)
+    plt.title("Episode Rewards During Training")
+    plt.xlabel("Episode")
+    plt.ylabel("Reward")
+    
+    plt.subplot(1, 2, 2)
+    plt.scatter(range(len(avg_rewards)), avg_rewards, c=training_difficulties, cmap='viridis')
+    plt.colorbar(label='Difficulty')
+    plt.title("Rewards by Difficulty")
+    plt.xlabel("Episode")
+    plt.ylabel("Reward")
+    plt.tight_layout()
+    plt.show()
+    
+    return agent, envs
+
+def generate_dungeon_with_model(agent, difficulty):
+    """Generate a maze-style dungeon using reinforcement learning model."""
+    env = DungeonEnvironment(difficulty)
+    state = env.reset()  # Already modified to generate maze style
+    done = False
+    
+    # Use RL agent for minor modifications while maintaining basic maze structure
+    while not done:
+        action = agent.act(state, eval_mode=True)
+        
+        # Reduce random exploration to avoid breaking maze structure
+        if random.random() < 0.15:  # Lower chance of random modifications
+            playable_area_size = env.width * env.height
+            position_idx = random.randint(0, playable_area_size - 1)
+            
+            # Bias toward walls and empty spaces to maintain maze character
+            r = random.random()
+            if r < 0.6:  # Keep more walls
+                element_type = 1  # WALL
+            elif r < 0.85:
+                element_type = 0  # EMPTY
+            elif r < 0.95:
+                element_type = 3  # TREASURE
+            else:
+                element_type = 2  # LAVA
+                
+            action = position_idx + element_type * playable_area_size
+        
+        state, _, done = env.step(action)
+    
+    # Ensure maze's basic characteristics remain unchanged
+    env._ensure_wall_density()
+    
+    # Ensure path exists
+    if not env._check_path_exists():
+        env._carve_path_between(env.start_pos, env.exit_pos)
+    
+    return env.grid
+
+def visualize_dungeon(grid):
+    """Display dungeon grid using matplotlib"""
+    fig, ax = plt.subplots(figsize=(6, 6))
+    for y in range(grid.shape[0]):
+        for x in range(grid.shape[1]):
+            rect = plt.Rectangle((x, grid.shape[0] - y - 1), 1, 1, facecolor=COLOR_MAP[grid[y, x]], edgecolor='black')
+            ax.add_patch(rect)
+
+    ax.set_xlim(0, grid.shape[1])
+    ax.set_ylim(0, grid.shape[0])
+    ax.set_xticks([])
+    ax.set_yticks([])
+    plt.title("Generated Dungeon")
+    plt.show()
+
+def load_trained_agent(model_path="dungeon_rl_model.pth"):
+    """Load the trained model weights into a new agent"""
+    agent = DungeonAgent(state_size=20*20, action_size=20*20*8)  # Match the element_types length (8)
+    agent.qnetwork.load_state_dict(torch.load(model_path, map_location=torch.device('cpu')))
+    agent.qnetwork.eval()  # Set to evaluation mode
+    print(f"Model loaded from: {model_path}")
+    return agent
+
+# Train and Visualize
+if __name__ == "__main__":
+    # Select training mode or loading a pre-trained model
+    mode = "train"  # Change to "load" to use a pre-trained model
+    
+    if mode == "train":
+        print("Training new model...")
+        # Increased episodes for better training
+        trained_agent, trained_envs = train_dungeon_generator(num_episodes=500)
+    else:
+        print("Loading pre-trained model...")
+        try:
+            trained_agent = load_trained_agent("dungeon_rl_model.pth")
+        except FileNotFoundError:
+            print("Pre-trained model not found. Training new model instead...")
+            trained_agent, trained_envs = train_dungeon_generator(num_episodes=500)
+    
+    # Generate and visualize dungeons at different difficulty levels
+    for difficulty in [3, 6, 9]:
+        print(f"\nGenerating dungeon with difficulty: {difficulty}")
+        # Generate multiple dungeons and select the best one
+        best_dungeon = None
+        best_score = -float('inf')
+        
+        for attempt in range(3):
+            generated_dungeon = generate_dungeon_with_model(trained_agent, difficulty)
+            
+            # Count playable spaces and paths
+            env_temp = DungeonEnvironment(difficulty)
+            env_temp.grid = generated_dungeon
+            env_temp.start_pos = None
+            env_temp.exit_pos = None
+            
+            # Find start and exit positions
+            for y in range(generated_dungeon.shape[0]):
+                for x in range(generated_dungeon.shape[1]):
+                    if generated_dungeon[y, x] == START:
+                        env_temp.start_pos = (x, y)
+                    elif generated_dungeon[y, x] == EXIT:
+                        env_temp.exit_pos = (x, y)
+            
+            # Calculate playability score
+            empty_ratio = np.sum(generated_dungeon == EMPTY) / (env_temp.width * env_temp.height)
+            path_complexity = env_temp._calculate_path_complexity() if env_temp.start_pos and env_temp.exit_pos else 0
+            num_treasures = np.sum(generated_dungeon == TREASURE)
+            
+            # Has path between start and exit?
+            has_path = env_temp._check_path_exists() if env_temp.start_pos and env_temp.exit_pos else False
+            
+            # Calculate score (heavily penalize if no valid path)
+            if not has_path:
+                score = -1000
+            else:
+                score = (
+                    path_complexity * 50 +  # Path complexity is good
+                    empty_ratio * 30 +      # More empty space is generally better
+                    num_treasures * 10      # More treasures are good
+                )
+            
+            print(f"  Attempt {attempt+1}: Score = {score:.1f} (Path: {has_path}, Complexity: {path_complexity:.2f}, Empty: {empty_ratio:.2f}, Treasures: {num_treasures})")
+            
+            if score > best_score:
+                best_score = score
+                best_dungeon = generated_dungeon
+        
+        print(f"Selected best dungeon with score: {best_score:.1f}")
+        visualize_dungeon(best_dungeon)
+        
+        # Print dungeon statistics
+        empty_count = np.sum(best_dungeon == EMPTY)
+        wall_count = np.sum(best_dungeon == WALL)
+        lava_count = np.sum(best_dungeon == LAVA)
+        treasure_count = np.sum(best_dungeon == TREASURE)
+        enemy_count = np.sum(best_dungeon == ENEMY)
+        
+        total_cells = best_dungeon.size
+        print(f"Dungeon Statistics:")
+        print(f"  Empty spaces: {empty_count} ({empty_count/total_cells*100:.1f}%)")
+        print(f"  Walls: {wall_count} ({wall_count/total_cells*100:.1f}%)")
+        print(f"  Lava: {lava_count} ({lava_count/total_cells*100:.1f}%)")
+        print(f"  Treasures: {treasure_count}")
+        print(f"  Enemies: {enemy_count}")
+        print(f"  Total cells: {total_cells}")
