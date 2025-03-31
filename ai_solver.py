@@ -12,18 +12,17 @@ ENEMY = 6
 
 class DungeonSolverQLearning:
     def __init__(self, dungeon, start, goal, alpha=0.1, gamma=0.9, epsilon=0.9, episodes=100000):
-        self.original_dungeon = np.copy(dungeon)  # Store original state
-        self.dungeon = np.copy(dungeon)  # Working copy
+        self.original_dungeon = np.copy(dungeon)
+        self.dungeon = np.copy(dungeon)
         self.start = start
         self.goal = goal
-        self.alpha = alpha  
-        self.gamma = gamma  
-        self.epsilon = epsilon  
-        self.episodes = episodes  
-        self.q_table = np.zeros((*dungeon.shape, 4))  # Q-table
-        self.actions = [(0, 1), (1, 0), (0, -1), (-1, 0)]  # Right, Down, Left, Up
+        self.alpha = alpha
+        self.gamma = gamma
+        self.epsilon = epsilon
+        self.episodes = episodes
+        self.q_table = np.zeros((*dungeon.shape, 4))
+        self.actions = [(0, 1), (1, 0), (0, -1), (-1, 0)]
 
-        # Rewards mapping
         self.rewards = {
             EMPTY: -0.1,
             WALL: -100,
@@ -35,17 +34,21 @@ class DungeonSolverQLearning:
         }
 
     def train(self):
-        """Train the Q-learning agent to solve the dungeon."""
-        for episode in range(self.episodes):
-            self.dungeon = np.copy(self.original_dungeon)  # ✅ Reset dungeon
-            x, y = self.start
-            health = 100  
+        max_steps = 200  # Limit per episode
 
-            while (x, y) != self.goal:
+        for episode in range(self.episodes):
+            self.dungeon = np.copy(self.original_dungeon)
+            x, y = self.start
+            health = 100
+            steps = 0
+
+            while (x, y) != self.goal and steps < max_steps:
+                steps += 1
+
                 if random.uniform(0, 1) < self.epsilon:
                     action = random.choice(range(4))  # Explore
                 else:
-                    action = np.argmax(self.q_table[x, y])  # Exploit learned values
+                    action = np.argmax(self.q_table[x, y])  # Exploit
 
                 dx, dy = self.actions[action]
                 nx, ny = x + dx, y + dy
@@ -54,25 +57,25 @@ class DungeonSolverQLearning:
                     cell_type = self.dungeon[nx, ny]
 
                     if cell_type == WALL:
-                        continue  
+                        continue
 
                     if cell_type == LAVA:
-                        self.q_table[x, y, action] = -1000  
-                        break  
+                        self.q_table[x, y, action] = -1000
+                        break
 
                     if cell_type == ENEMY:
-                        health -= 20  
+                        health -= 20
                         if health <= 0:
-                            break  
+                            break
 
                     reward = self.rewards.get(cell_type, -1)
 
                     if cell_type == TREASURE:
-                        health += 50  
-                        reward += 100  
-                        self.dungeon[nx, ny] = EMPTY  
+                        health += 50
+                        reward += 100
+                        self.dungeon[nx, ny] = EMPTY  # Mark as collected
 
-                    max_future_q = np.max(self.q_table[nx, ny]) if 0 <= nx < self.q_table.shape[0] and 0 <= ny < self.q_table.shape[1] else 0
+                    max_future_q = np.max(self.q_table[nx, ny])
                     self.q_table[x, y, action] = (1 - self.alpha) * self.q_table[x, y, action] + \
                                                  self.alpha * (reward + self.gamma * max_future_q)
 
@@ -81,18 +84,21 @@ class DungeonSolverQLearning:
             self.epsilon = max(0.01, self.epsilon * 0.995)
 
     def solve(self):
-        """Use the trained Q-table to find an optimal path."""
         path = []
         x, y = self.start
-        health = 100  
-
-        # ✅ Reset dungeon before solving to properly track treasures
+        health = 100
         self.dungeon = np.copy(self.original_dungeon)
+        visited = set()
+        steps = 0
+        max_steps = 200
 
-        while (x, y) != self.goal:
+        while (x, y) != self.goal and steps < max_steps:
             path.append((x, y))
-            possible_moves = {}  
-            treasure_moves = []  
+            visited.add((x, y))
+            steps += 1
+
+            possible_moves = {}
+            treasure_moves = []
 
             for i, (dx, dy) in enumerate(self.actions):
                 nx, ny = x + dx, y + dy
@@ -110,6 +116,9 @@ class DungeonSolverQLearning:
             nx, ny = x + dx, y + dy
             cell_type = self.dungeon[nx, ny]
 
+            if (nx, ny) in visited and cell_type == ENEMY:
+                return path, "Defeated by enemies (looped into enemy tile)."
+
             if cell_type == LAVA:
                 return path, "Fell into lava, game over."
 
@@ -117,41 +126,22 @@ class DungeonSolverQLearning:
                 health -= 20
                 if health <= 0:
                     return path, "Defeated by enemies, game over."
-            
-            # ✅ Ensure treasure is collected and health is updated
-            if cell_type == TREASURE and self.dungeon[nx, ny] == TREASURE:
-                health += 50  
-                self.dungeon[nx, ny] = EMPTY  
+
+            if cell_type == TREASURE:
+                print(f"Collected treasure at {(nx, ny)}")
+                health += 50
+                self.dungeon[nx, ny] = EMPTY
 
             x, y = nx, ny
 
-        path.append(self.goal)
-        return path, f"Reached exit with {health} health."
+        path.append((x, y))
 
-# Function to solve a generated level
+        if (x, y) == self.goal:
+            return path, f"Reached exit with {health} health."
+        else:
+            return path, "Did not reach exit, ran out of steps."
+
 def solve_generated_level(dungeon, start, goal):
     solver = DungeonSolverQLearning(dungeon, start, goal)
     solver.train()
-    path, result = solver.solve()
-    return path, result
-
-# Example input dungeon (provided by level generator)
-dungeon = np.array([
-    # [5,  0,  1,  0,  3],
-    # [0,  1,  0,  1,  6],
-    # [0,  0,  6,  3,  3],
-    # [1,  0,  1,  3,  3],
-    # [0,  0,  0,  0,  4]
-    [5, 0, 1, 0, 3],
-    [0, 1, 0, 1, 6],
-    [0, 0, 6, 3, 3],
-    [1, 0, 1, 3, 3],
-    [0, 0, 0, 0, 4]
-])
-
-start = (0, 2)  # Start position
-goal = (4,4)   # Exit position
-
-path, outcome = solve_generated_level(dungeon, start, goal)
-print("Solved Path:", path)
-print("Outcome:", outcome)
+    return solver.solve()
