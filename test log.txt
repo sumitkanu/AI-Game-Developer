@@ -56,3 +56,12 @@ test log
 
 
 Q-learning
+
+
+- increase enemy loss to -50 
+- 
+
+- check if possible without retraining each time - use only once trained Q table 
+- check if possible to check two steps ahead instead of one step ahead 
+    - will take approximately 4 times longer 
+    

@@ -1,16 +1,32 @@
-# main.py
 import numpy as np
 from ai_solver import solve_generated_level
+
+def parse_tuple(line):
+    return tuple(map(int, line.strip().strip('()').split(',')))
 
 def read_input(filename):
     with open(filename, 'r') as f:
         lines = f.readlines()
 
-    size = tuple(map(int, lines[0].strip().split()))
-    start = tuple(map(int, lines[1].strip().split()))
-    goal = tuple(map(int, lines[2].strip().split()))
-    dungeon = [list(map(int, line.strip().split())) for line in lines[3:]]
-    return np.array(dungeon), start, goal
+    # Parse size, start, and goal
+    size = parse_tuple(lines[0])  # Not used, but could validate shape
+    start = parse_tuple(lines[1])
+    goal = parse_tuple(lines[2])
+
+    # Read grid lines as rows
+    dungeon_rows = []
+    for line in lines[3:]:
+        line = line.strip().replace('[', '').replace(']', '')
+        if line:
+            dungeon_rows.append(list(map(int, line.split())))
+
+    dungeon = np.array(dungeon_rows)
+
+    # Optional: Validate shape matches declared size
+    if dungeon.shape != size:
+        raise ValueError(f"Declared size {size} doesn't match actual dungeon shape {dungeon.shape}")
+
+    return dungeon, start, goal
 
 def write_output(filename, path, outcome):
     with open(filename, 'w') as f:
