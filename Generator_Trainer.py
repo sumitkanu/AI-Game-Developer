@@ -168,14 +168,14 @@ def export_dungeon(grid):
 
     return (rows, cols), start_pos, exit_pos, grid
 
-def load_trained_agent(model_path="/content/drive/MyDrive/FAI/dungeon_rl_model.pth"):
+def load_trained_agent(model_path="dungeon_rl_model.pth"):
     """Load the trained model weights into a new agent."""
     grid_size = 20 * 20
     tile_types = len(COLOR_MAP)
     state_size = grid_size * tile_types + 2
     action_size = 9
 
-    agent = DungeonAgent(state_size=state_size, action_size=action_size)
+    agent = DungeonAgent(action_size=action_size)
     agent.qnetwork.load_state_dict(torch.load(model_path, map_location=torch.device('cpu')))
     agent.qnetwork.eval()
 
