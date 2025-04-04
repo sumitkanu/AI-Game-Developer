@@ -108,15 +108,15 @@ class DungeonGeneratorUI:
         # Load the trained agent
         self.agent = load_trained_agent()
         
-        # Image paths for dungeon elements
+        # Image paths for dungeon elements - using existing images from your project
         self.element_images = {
-            EMPTY: self.load_image_or_color("images/floor.png", COLOR_MAP[EMPTY]),
-            WALL: self.load_image_or_color("images/wall.png", COLOR_MAP[WALL]),
-            LAVA: self.load_image_or_color("images/lava.png", COLOR_MAP[LAVA]),
-            TREASURE: self.load_image_or_color("images/treasure.png", COLOR_MAP[TREASURE]),
-            EXIT: self.load_image_or_color("images/exit.png", COLOR_MAP[EXIT]),
-            START: self.load_image_or_color("images/start.png", COLOR_MAP[START]),
-            ENEMY: self.load_image_or_color("images/enemy.png", COLOR_MAP[ENEMY])
+            EMPTY: self.load_image_or_color("Floor.png", COLOR_MAP[EMPTY]),
+            WALL: self.load_image_or_color("Wall.png", COLOR_MAP[WALL]),
+            LAVA: self.load_image_or_color("Lava.png", COLOR_MAP[LAVA]),
+            TREASURE: self.load_image_or_color("Treasure.png", COLOR_MAP[TREASURE]),
+            EXIT: self.load_image_or_color("Door.png", COLOR_MAP[EXIT]),
+            START: self.load_image_or_color("Start.png", COLOR_MAP[START]),
+            ENEMY: self.load_image_or_color("monster.png", COLOR_MAP[ENEMY])
         }
         
         # Current dungeon data
@@ -138,8 +138,10 @@ class DungeonGeneratorUI:
                 img = Image.open(image_path)
                 img = img.resize((25, 25))  # Resize to fit grid cells
                 return ImageTk.PhotoImage(img)
+            print(f"Image not found: {image_path}, using color instead")
             return color
-        except:
+        except Exception as e:
+            print(f"Error loading image {image_path}: {e}")
             return color
     
     def create_widgets(self):

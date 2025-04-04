@@ -1,193 +1,183 @@
-import tkinter as tk
-from tkinter import ttk
-import matplotlib
-matplotlib.use("TkAgg")
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+import time
 import matplotlib.pyplot as plt
-import numpy as np
-from PIL import Image, ImageTk
-import os
+import torch
+import torch.nn.functional as F
+import random
+from Dungeon_Environment import DungeonEnvironment
+from Generator_Agent import DungeonAgent, COLOR_MAP, EXIT, START
 
-from Generator_Agent import COLOR_MAP, EMPTY, WALL, LAVA, TREASURE, EXIT, START, ENEMY
-from Generator_Trainer import load_trained_agent, generate_dungeon_with_model, export_dungeon
+def one_hot_encode_grid_with_cursor(grid, cursor, num_tile_types=7):
+    """
+    Converts a 2D grid and cursor position into an 8-channel tensor [8, 20, 20]
+    """
+    grid_tensor = torch.tensor(grid, dtype=torch.long)
+    one_hot = F.one_hot(grid_tensor, num_classes=num_tile_types)  # [20, 20, 7]
+    one_hot = one_hot.permute(2, 0, 1).float()  # [7, 20, 20]
 
-class DungeonGeneratorUI:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("Dungeon Generator")
-        self.root.geometry("750x600")
-        
-        # Load the trained agent
-        self.agent = load_trained_agent()
-        
-        # Image paths for dungeon elements
-        self.element_images = {
-            EMPTY: self.load_image_or_color("images/floor.png", COLOR_MAP[EMPTY]),
-            WALL: self.load_image_or_color("images/wall.png", COLOR_MAP[WALL]),
-            LAVA: self.load_image_or_color("images/lava.png", COLOR_MAP[LAVA]),
-            TREASURE: self.load_image_or_color("images/treasure.png", COLOR_MAP[TREASURE]),
-            EXIT: self.load_image_or_color("images/exit.png", COLOR_MAP[EXIT]),
-            START: self.load_image_or_color("images/start.png", COLOR_MAP[START]),
-            ENEMY: self.load_image_or_color("images/enemy.png", COLOR_MAP[ENEMY])
-        }
-        
-        # Current dungeon data
-        self.current_grid = None
-        self.current_start_pos = None
-        self.current_exit_pos = None
-        self.current_treasure_count = 0
-        
-        # Create UI elements
-        self.create_widgets()
-        
-        # Generate initial dungeon
-        self.generate_dungeon()
-    
-    def load_image_or_color(self, image_path, color):
-        """Load image if exists, otherwise return the color"""
-        try:
-            if os.path.exists(image_path):
-                img = Image.open(image_path)
-                img = img.resize((25, 25))  # Resize to fit grid cells
-                return ImageTk.PhotoImage(img)
-            return color
-        except:
-            return color
-    
-    def create_widgets(self):
-        # Main frame
-        main_frame = ttk.Frame(self.root, padding=10)
-        main_frame.pack(fill=tk.BOTH, expand=True)
-        
-        # Left side (dungeon display)
-        dungeon_frame = ttk.Frame(main_frame)
-        dungeon_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        
-        # Canvas for dungeon grid
-        self.canvas_size = 500
-        self.canvas = tk.Canvas(dungeon_frame, width=self.canvas_size, height=self.canvas_size,
-                              bg="white", highlightthickness=1, highlightbackground="black")
-        self.canvas.pack(padx=10, pady=10)
-        
-        # Right side (controls)
-        control_frame = ttk.Frame(main_frame, padding=10)
-        control_frame.pack(side=tk.RIGHT, fill=tk.Y)
-        
-        # Level selection
-        level_frame = ttk.LabelFrame(control_frame, text="Level", padding=10)
-        level_frame.pack(fill=tk.X, pady=10)
-        
-        ttk.Label(level_frame, text="Difficulty:").pack(anchor=tk.W)
-        
-        self.difficulty_var = tk.IntVar(value=5)
-        difficulty_scale = ttk.Scale(level_frame, from_=1, to=10, orient=tk.HORIZONTAL,
-                                   variable=self.difficulty_var, command=self.on_difficulty_change)
-        difficulty_scale.pack(fill=tk.X)
-        
-        self.difficulty_label = ttk.Label(level_frame, text="5")
-        self.difficulty_label.pack()
-        
-        # Generate button
-        generate_button = ttk.Button(level_frame, text="Generate Dungeon", command=self.generate_dungeon)
-        generate_button.pack(fill=tk.X, pady=10)
-        
-        # Rewards display
-        rewards_frame = ttk.LabelFrame(control_frame, text="Rewards", padding=10)
-        rewards_frame.pack(fill=tk.X, pady=10)
-        
-        self.treasure_var = tk.StringVar(value="Treasures: 0")
-        ttk.Label(rewards_frame, textvariable=self.treasure_var).pack(anchor=tk.W)
-        
-        # Statistics display
-        stats_frame = ttk.LabelFrame(control_frame, text="Statistics", padding=10)
-        stats_frame.pack(fill=tk.X, pady=10)
-        
-        self.size_var = tk.StringVar(value="Size: 20x20")
-        self.start_var = tk.StringVar(value="Start: (0,0)")
-        self.exit_var = tk.StringVar(value="Exit: (0,0)")
-        
-        ttk.Label(stats_frame, textvariable=self.size_var).pack(anchor=tk.W)
-        ttk.Label(stats_frame, textvariable=self.start_var).pack(anchor=tk.W)
-        ttk.Label(stats_frame, textvariable=self.exit_var).pack(anchor=tk.W)
-    
-    def on_difficulty_change(self, event):
-        difficulty = int(float(self.difficulty_var.get()))
-        self.difficulty_label.configure(text=str(difficulty))
-    
-    def generate_dungeon(self):
-        difficulty = int(self.difficulty_var.get())
-        
-        # Generate dungeon using the model
-        generated_dungeon = generate_dungeon_with_model(self.agent, difficulty)
-        
-        # Export dungeon data
-        (rows, cols), start_pos, exit_pos, grid = export_dungeon(generated_dungeon)
-        
-        self.current_grid = grid
-        self.current_start_pos = start_pos
-        self.current_exit_pos = exit_pos
-        
-        # Calculate treasure count
-        self.current_treasure_count = np.sum(grid == TREASURE)
-        
-        # Update UI
-        self.update_dungeon_display()
-        self.update_stats()
-    
-    def update_dungeon_display(self):
-        self.canvas.delete("all")
-        
-        if self.current_grid is None:
-            return
-        
-        rows, cols = self.current_grid.shape
-        cell_size = min(self.canvas_size // rows, self.canvas_size // cols)
-        
-        # Center the grid in the canvas
-        x_offset = (self.canvas_size - (cols * cell_size)) // 2
-        y_offset = (self.canvas_size - (rows * cell_size)) // 2
-        
-        # Draw each cell
-        for y in range(rows):
-            for x in range(cols):
-                cell_value = self.current_grid[y, x]
-                
-                # Calculate position
-                x1 = x_offset + x * cell_size
-                y1 = y_offset + y * cell_size
-                x2 = x1 + cell_size
-                y2 = y1 + cell_size
-                
-                # Draw cell
-                if isinstance(self.element_images[cell_value], str):
-                    # It's a color
-                    self.canvas.create_rectangle(x1, y1, x2, y2, 
-                                               fill=self.element_images[cell_value],
-                                               outline="black")
-                else:
-                    # It's an image
-                    self.canvas.create_rectangle(x1, y1, x2, y2, fill="white", outline="black")
-                    self.canvas.create_image(x1 + cell_size//2, y1 + cell_size//2, 
-                                           image=self.element_images[cell_value])
-    
-    def update_stats(self):
-        if self.current_grid is not None:
-            rows, cols = self.current_grid.shape
-            self.size_var.set(f"Size: {cols}x{rows}")
-            
-            if self.current_start_pos:
-                self.start_var.set(f"Start: ({self.current_start_pos[1]},{self.current_start_pos[0]})")
-            
-            if self.current_exit_pos:
-                self.exit_var.set(f"Exit: ({self.current_exit_pos[1]},{self.current_exit_pos[0]})")
-            
-            self.treasure_var.set(f"Treasures: {self.current_treasure_count}")
+    # Add 8th channel for cursor
+    cursor_channel = torch.zeros((1, 20, 20), dtype=torch.float32)
+    cursor_x, cursor_y = cursor
+    cursor_channel[0, cursor_y, cursor_x] = 1.0
 
+    full_tensor = torch.cat([one_hot, cursor_channel], dim=0)  # [8, 20, 20]
+    return full_tensor
 
-def main():
-    root = tk.Tk()
-    app = DungeonGeneratorUI(root)
-    root.mainloop()
+def encode_difficulty(difficulty):
+    """
+    Converts a scalar difficulty (1–10) into a normalized tensor [B, 1]
+    """
+    return torch.tensor([[difficulty / 10.0]], dtype=torch.float32)  # shape [1, 1]
 
-if __name__ == "__main__":
-    main()
+def train_dungeon_generator(num_episodes=1000, model_path="dungeon_rl_model.pth"):
+    """Train a single RL model to generate levels for all difficulties with diagnostics (CNN version)."""
+    envs = {d: DungeonEnvironment(d) for d in range(1, 11)}
+    tile_types = len(envs[1].element_types)  # should be 7
+    action_size = 9
+
+    agent = DungeonAgent(action_size=action_size)  # Updated: remove state_size since CNN doesn't need it
+
+    episode_rewards = []
+    t0 = time.time()
+
+    for episode in range(num_episodes):
+        difficulty = min(1 + episode // 200, 10)
+        env = envs[difficulty]
+        env.reset()
+
+        # Prepare state (CNN-compatible)
+        grid_tensor = one_hot_encode_grid_with_cursor(env.grid, env.cursor).unsqueeze(0)
+        difficulty_tensor = encode_difficulty(env.difficulty)               # [1, 1]
+        state = (grid_tensor, difficulty_tensor)
+
+        done = False
+        total_reward = 0
+        losses_before = len(agent.training_losses)
+
+        while not done:
+            # Forward pass: act
+            action = agent.act(*state)  # Unpack grid and difficulty
+
+            # Environment transition
+            _, reward, done = env.step(action)
+
+            # Prepare next state
+            next_grid_tensor = onext_grid_tensor = one_hot_encode_grid_with_cursor(env.grid, env.cursor).unsqueeze(0)
+            next_difficulty_tensor = encode_difficulty(env.difficulty)      # [1, 1]
+            next_state = (next_grid_tensor, next_difficulty_tensor)
+
+            # Learning step
+            agent.step(state, action, reward, next_state, done)
+
+            # Transition
+            state = next_state
+            total_reward += reward
+
+        episode_rewards.append(total_reward)
+
+        # Logging
+        if episode % 50 == 0 and episode > 0:
+            elapsed = time.time() - t0
+            avg_reward = sum(episode_rewards[-50:]) / 50
+            avg_loss = (sum(agent.training_losses[losses_before:]) /
+                        max(1, len(agent.training_losses) - losses_before))
+            print(f"Episode {episode} | Avg Reward: {avg_reward:.2f} | Avg Loss: {avg_loss:.4f} | "
+                  f"Epsilon: {agent.epsilon:.3f} | Time: {elapsed:.2f}s")
+            t0 = time.time()
+
+    # Save model
+    torch.save(agent.qnetwork.state_dict(), model_path)
+    print(f"Model saved to: {model_path}")
+
+    # Plot diagnostics
+    plot_training_diagnostics(episode_rewards, agent.training_losses)
+
+    return agent, envs
+
+def plot_training_diagnostics(rewards, losses):
+    """Plot rewards and losses."""
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
+
+    ax1.plot(rewards)
+    ax1.set_title("Episode Rewards")
+    ax1.set_xlabel("Episode")
+    ax1.set_ylabel("Reward")
+
+    ax2.plot(losses)
+    ax2.set_title("Q-Network Losses")
+    ax2.set_xlabel("Steps")
+    ax2.set_ylabel("Loss")
+
+    plt.tight_layout()
+    plt.show()
+
+def generate_dungeon_with_model(agent, difficulty):
+    env = DungeonEnvironment(difficulty)
+    state = env.reset()  # returns just the grid
+    done = False
+
+    while not done:
+        grid_tensor, difficulty_tensor = state  # since env.reset() returns (grid_tensor, difficulty_tensor)
+        difficulty_tensor = torch.tensor([[difficulty / 10.0]], dtype=torch.float32)
+
+        action = agent.act(grid_tensor, difficulty_tensor, eps_override=0.0)
+
+        if random.random() < 0.2:
+            action = random.randint(0, 8)
+
+        state, _, done = env.step(action)
+
+    return env.grid
+
+def visualize_dungeon(grid):
+    """Display dungeon grid using matplotlib."""
+    fig, ax = plt.subplots(figsize=(6, 6))
+    for y in range(grid.shape[0]):
+        for x in range(grid.shape[1]):
+            rect = plt.Rectangle(
+                (x, grid.shape[0] - y - 1), 1, 1,
+                facecolor=COLOR_MAP[grid[y, x]],
+                edgecolor='black'
+            )
+            ax.add_patch(rect)
+
+    ax.set_xlim(0, grid.shape[1])
+    ax.set_ylim(0, grid.shape[0])
+    ax.set_xticks([])
+    ax.set_yticks([])
+    plt.title("Generated Dungeon")
+    plt.show()
+
+def export_dungeon(grid):
+    """
+    Inspect a dungeon grid and return:
+        - the grid itself
+        - its size (width, height)
+        - the start position (START tile)
+        - the exit position (EXIT tile)
+    """
+    rows, cols = grid.shape
+    start_pos = None
+    exit_pos = None
+
+    for row in range(rows):
+        for col in range(cols):
+            if grid[row, col] == START:
+                start_pos = (row, col)
+            elif grid[row, col] == EXIT:
+                exit_pos = (row, col)
+
+    return (rows, cols), start_pos, exit_pos, grid
+
+def load_trained_agent(model_path="dungeon_rl_model.pth"):
+    """Load the trained model weights into a new agent."""
+    grid_size = 20 * 20
+    tile_types = len(COLOR_MAP)
+    state_size = grid_size * tile_types + 2
+    action_size = 9
+
+    agent = DungeonAgent(action_size=action_size)
+    agent.qnetwork.load_state_dict(torch.load(model_path, map_location=torch.device('cpu')))
+    agent.qnetwork.eval()
+
+    print(f"Model loaded from: {model_path}")
+    return agent
