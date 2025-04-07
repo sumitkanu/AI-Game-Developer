@@ -2,14 +2,14 @@ import tkinter as tk
 from tkinter import ttk
 import matplotlib
 matplotlib.use("TkAgg")
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-import matplotlib.pyplot as plt
 import numpy as np
 from PIL import Image, ImageTk
 import os
 import torch
 import torch.nn.functional as F
 import random
+from solver.ai_solver import solve_generated_level
+
 
 # Direct imports from source files to avoid circular imports
 from generator.Generator_Agent import DungeonAgent, EMPTY, WALL, LAVA, TREASURE, EXIT, START, ENEMY, COLOR_MAP
@@ -104,6 +104,9 @@ class DungeonGeneratorUI:
         self.root = root
         self.root.title("Dungeon Generator")
         self.root.geometry("750x600")
+        self.last_solver_path = None
+        self.last_solver_outcome = ""
+        self.solver_outcome_var = tk.StringVar(value="Solver: Not yet run")
         
         # Load the trained agent
         self.agent = load_trained_agent()
@@ -180,7 +183,11 @@ class DungeonGeneratorUI:
         # Generate button
         generate_button = ttk.Button(level_frame, text="Generate Dungeon", command=self.generate_dungeon)
         generate_button.pack(fill=tk.X, pady=10)
-        
+
+        # Solve button
+        solve_button = ttk.Button(level_frame, text="Solve Dungeon", command=self.solve_current_dungeon)
+        solve_button.pack(fill=tk.X, pady=5)
+
         # Rewards display
         rewards_frame = ttk.LabelFrame(control_frame, text="Rewards", padding=10)
         rewards_frame.pack(fill=tk.X, pady=10)
@@ -199,12 +206,15 @@ class DungeonGeneratorUI:
         ttk.Label(stats_frame, textvariable=self.size_var).pack(anchor=tk.W)
         ttk.Label(stats_frame, textvariable=self.start_var).pack(anchor=tk.W)
         ttk.Label(stats_frame, textvariable=self.exit_var).pack(anchor=tk.W)
+        ttk.Label(stats_frame, textvariable=self.solver_outcome_var).pack(anchor=tk.W)
     
     def on_difficulty_change(self, event):
         difficulty = int(float(self.difficulty_var.get()))
         self.difficulty_label.configure(text=str(difficulty))
     
     def generate_dungeon(self):
+        self.last_solver_path = None
+        self.solver_outcome_var.set("Solver: Not yet run")
         difficulty = int(self.difficulty_var.get())
         
         # Generate dungeon using the model
@@ -259,6 +269,17 @@ class DungeonGeneratorUI:
                     self.canvas.create_rectangle(x1, y1, x2, y2, fill="white", outline="black")
                     self.canvas.create_image(x1 + cell_size//2, y1 + cell_size//2, 
                                            image=self.element_images[cell_value])
+                    
+                # Draw solver path if available
+                if self.last_solver_path:
+                    for step in self.last_solver_path:
+                        x, y = step
+                        x1 = x_offset + x * cell_size
+                        y1 = y_offset + y * cell_size
+                        x2 = x1 + cell_size
+                        y2 = y1 + cell_size
+                        self.canvas.create_rectangle(x1, y1, x2, y2, outline="black", width=2)
+
     
     def update_stats(self):
         if self.current_grid is not None:
@@ -272,6 +293,23 @@ class DungeonGeneratorUI:
                 self.exit_var.set(f"Exit: ({self.current_exit_pos[0]},{self.current_exit_pos[1]})")
             
             self.treasure_var.set(f"Treasures: {self.current_treasure_count}")
+
+    def solve_current_dungeon(self):
+        if self.current_grid is None or self.current_start_pos is None or self.current_exit_pos is None:
+            print("No dungeon loaded.")
+            return
+
+        # Call solver
+        try:
+            path, outcome = solve_generated_level(self.current_grid, self.current_start_pos, self.current_exit_pos)
+            self.last_solver_path = path
+            self.last_solver_outcome = outcome
+            self.solver_outcome_var.set(f"Solver: {outcome}")
+
+            self.update_dungeon_display()
+        except Exception as e:
+            print("Solver error:", e)
+
 
 def main():
     root = tk.Tk()
