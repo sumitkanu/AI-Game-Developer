@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 import torch
 import torch.nn.functional as F
 import random
-from Dungeon_Environment import DungeonEnvironment
+from generator.Dungeon_Environment import DungeonEnvironment
 from Generator_Agent import DungeonAgent, COLOR_MAP, EXIT, START
 
 def one_hot_encode_grid_with_cursor(grid, cursor, num_tile_types=7):
