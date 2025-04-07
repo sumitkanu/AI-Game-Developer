@@ -1,5 +1,5 @@
 import numpy as np
-from ai_solver import solve_generated_level
+from solver.ai_solver import solve_generated_level
 
 def parse_tuple(line):
     return tuple(map(int, line.strip().strip('()').split(',')))

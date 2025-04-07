@@ -12,8 +12,8 @@ import torch.nn.functional as F
 import random
 
 # Direct imports from source files to avoid circular imports
-from Generator_Agent import DungeonAgent, EMPTY, WALL, LAVA, TREASURE, EXIT, START, ENEMY, COLOR_MAP
-from Dungeon_Environment import DungeonEnvironment
+from generator.Generator_Agent import DungeonAgent, EMPTY, WALL, LAVA, TREASURE, EXIT, START, ENEMY, COLOR_MAP
+from generator.Dungeon_Environment import DungeonEnvironment
 
 def one_hot_encode_grid_with_cursor(grid, cursor, num_tile_types=7):
     """
