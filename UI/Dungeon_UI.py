@@ -262,23 +262,24 @@ class DungeonGeneratorUI:
                 if isinstance(self.element_images[cell_value], str):
                     # It's a color
                     self.canvas.create_rectangle(x1, y1, x2, y2, 
-                                               fill=self.element_images[cell_value],
-                                               outline="black")
+                                            fill=self.element_images[cell_value],
+                                            outline="black")
                 else:
                     # It's an image
                     self.canvas.create_rectangle(x1, y1, x2, y2, fill="white", outline="black")
                     self.canvas.create_image(x1 + cell_size//2, y1 + cell_size//2, 
-                                           image=self.element_images[cell_value])
-                    
-                # Draw solver path if available
-                if self.last_solver_path:
-                    for step in self.last_solver_path:
-                        x, y = step
-                        x1 = x_offset + x * cell_size
-                        y1 = y_offset + y * cell_size
-                        x2 = x1 + cell_size
-                        y2 = y1 + cell_size
-                        self.canvas.create_rectangle(x1, y1, x2, y2, outline="black", width=2)
+                                        image=self.element_images[cell_value])
+        
+        # Draw solver path if available - 绘制在地图上方而不是替换地图
+        if self.last_solver_path:
+            for step in self.last_solver_path:
+                px, py = step
+                px1 = x_offset + px * cell_size
+                py1 = y_offset + py * cell_size
+                px2 = px1 + cell_size
+                py2 = py1 + cell_size
+                # 只绘制路径标记，不替换原始单元格
+                self.canvas.create_rectangle(px1, py1, px2, py2, outline="red", width=2)
 
     
     def update_stats(self):
