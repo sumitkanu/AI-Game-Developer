@@ -270,7 +270,7 @@ class DungeonGeneratorUI:
                     self.canvas.create_image(x1 + cell_size//2, y1 + cell_size//2, 
                                         image=self.element_images[cell_value])
         
-        # Draw solver path if available - 绘制在地图上方而不是替换地图
+        # Draw solver path if available
         if self.last_solver_path:
             for step in self.last_solver_path:
                 px, py = step
@@ -278,7 +278,6 @@ class DungeonGeneratorUI:
                 py1 = y_offset + py * cell_size
                 px2 = px1 + cell_size
                 py2 = py1 + cell_size
-                # 只绘制路径标记，不替换原始单元格
                 self.canvas.create_rectangle(px1, py1, px2, py2, outline="red", width=2)
 
     
