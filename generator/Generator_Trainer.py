@@ -4,39 +4,41 @@ import torch
 import torch.nn.functional as F
 import random
 from generator.Dungeon_Environment import DungeonEnvironment
-from Generator_Agent import DungeonAgent, COLOR_MAP, EXIT, START
+from generator.Generator_Agent import DungeonAgent, COLOR_MAP, EXIT, START, TREASURE
+from solver.ai_solver import solve_generated_level
 
 def one_hot_encode_grid_with_cursor(grid, cursor, num_tile_types=7):
     """
     Converts a 2D grid and cursor position into an 8-channel tensor [8, 20, 20]
     """
     grid_tensor = torch.tensor(grid, dtype=torch.long)
-    one_hot = F.one_hot(grid_tensor, num_classes=num_tile_types)  # [20, 20, 7]
-    one_hot = one_hot.permute(2, 0, 1).float()  # [7, 20, 20]
+    one_hot = F.one_hot(grid_tensor, num_classes=num_tile_types)
+    one_hot = one_hot.permute(2, 0, 1).float()
 
     # Add 8th channel for cursor
     cursor_channel = torch.zeros((1, 20, 20), dtype=torch.float32)
     cursor_x, cursor_y = cursor
     cursor_channel[0, cursor_y, cursor_x] = 1.0
 
-    full_tensor = torch.cat([one_hot, cursor_channel], dim=0)  # [8, 20, 20]
+    full_tensor = torch.cat([one_hot, cursor_channel], dim=0)
     return full_tensor
 
 def encode_difficulty(difficulty):
     """
     Converts a scalar difficulty (1–10) into a normalized tensor [B, 1]
     """
-    return torch.tensor([[difficulty / 10.0]], dtype=torch.float32)  # shape [1, 1]
+    return torch.tensor([[difficulty / 10.0]], dtype=torch.float32)
 
 def train_dungeon_generator(num_episodes=1000, model_path="dungeon_rl_model.pth"):
-    """Train a single RL model to generate levels for all difficulties with diagnostics (CNN version)."""
+    """Train a single RL model to generate levels with CNN and solver-based feedback."""
     envs = {d: DungeonEnvironment(d) for d in range(1, 11)}
-    tile_types = len(envs[1].element_types)  # should be 7
+    tile_types = len(envs[1].element_types)
     action_size = 9
 
-    agent = DungeonAgent(action_size=action_size)  # Updated: remove state_size since CNN doesn't need it
-
+    agent = DungeonAgent(action_size=action_size)
     episode_rewards = []
+    solver_scores = []
+
     t0 = time.time()
 
     for episode in range(num_episodes):
@@ -44,9 +46,8 @@ def train_dungeon_generator(num_episodes=1000, model_path="dungeon_rl_model.pth"
         env = envs[difficulty]
         env.reset()
 
-        # Prepare state (CNN-compatible)
         grid_tensor = one_hot_encode_grid_with_cursor(env.grid, env.cursor).unsqueeze(0)
-        difficulty_tensor = encode_difficulty(env.difficulty)               # [1, 1]
+        difficulty_tensor = encode_difficulty(env.difficulty)
         state = (grid_tensor, difficulty_tensor)
 
         done = False
@@ -54,34 +55,58 @@ def train_dungeon_generator(num_episodes=1000, model_path="dungeon_rl_model.pth"
         losses_before = len(agent.training_losses)
 
         while not done:
-            # Forward pass: act
-            action = agent.act(*state)  # Unpack grid and difficulty
-
-            # Environment transition
+            action = agent.act(*state)
             _, reward, done = env.step(action)
 
-            # Prepare next state
-            next_grid_tensor = onext_grid_tensor = one_hot_encode_grid_with_cursor(env.grid, env.cursor).unsqueeze(0)
-            next_difficulty_tensor = encode_difficulty(env.difficulty)      # [1, 1]
+            next_grid_tensor = one_hot_encode_grid_with_cursor(env.grid, env.cursor).unsqueeze(0)
+            next_difficulty_tensor = encode_difficulty(env.difficulty)
             next_state = (next_grid_tensor, next_difficulty_tensor)
 
-            # Learning step
             agent.step(state, action, reward, next_state, done)
-
-            # Transition
             state = next_state
             total_reward += reward
 
+        # ====== SOLVER FEEDBACK INTEGRATION ======
+        final_grid = env.grid
+        (rows, cols), start, goal, _ = export_dungeon(final_grid)
+
+        solver_reward = 0
+        solver_success = False
+
+        try:
+            solve_start = time.time()
+            path, outcome = solve_generated_level(final_grid, start, goal)
+            solve_time = time.time() - solve_start
+
+            solver_success = "Reached exit" in outcome
+
+            if solver_success:
+                expected_time = 20 + 5 * difficulty
+                time_penalty = max(0, solve_time - expected_time)
+                time_score = max(0, 100 - int(time_penalty))
+
+                treasure_count = sum(1 for (x, y) in path if final_grid[y][x] == TREASURE)
+                solver_reward = time_score + (5 * treasure_count)
+            else:
+                solver_reward = -100  # Unsolvable penalty
+        except Exception as e:
+            print(f"[Solver Error] Episode {episode} — skipping solver reward:", str(e))
+            solver_reward = -100
+
+        total_reward += solver_reward
+        solver_scores.append(solver_reward)
+
         episode_rewards.append(total_reward)
 
-        # Logging
+        # === Logging ===
         if episode % 50 == 0 and episode > 0:
             elapsed = time.time() - t0
             avg_reward = sum(episode_rewards[-50:]) / 50
             avg_loss = (sum(agent.training_losses[losses_before:]) /
                         max(1, len(agent.training_losses) - losses_before))
-            print(f"Episode {episode} | Avg Reward: {avg_reward:.2f} | Avg Loss: {avg_loss:.4f} | "
-                  f"Epsilon: {agent.epsilon:.3f} | Time: {elapsed:.2f}s")
+            avg_solver = sum(solver_scores[-50:]) / 50
+            print(f"Episode {episode} | Reward: {avg_reward:.2f} | Solver: {avg_solver:.2f} | "
+                  f"Loss: {avg_loss:.4f} | Epsilon: {agent.epsilon:.3f} | Time: {elapsed:.2f}s")
             t0 = time.time()
 
     # Save model
@@ -89,26 +114,33 @@ def train_dungeon_generator(num_episodes=1000, model_path="dungeon_rl_model.pth"
     print(f"Model saved to: {model_path}")
 
     # Plot diagnostics
-    plot_training_diagnostics(episode_rewards, agent.training_losses)
+    plot_training_diagnostics(episode_rewards, agent.training_losses, solver_scores)
 
     return agent, envs
 
-def plot_training_diagnostics(rewards, losses):
-    """Plot rewards and losses."""
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
+def plot_training_diagnostics(rewards, losses, solver_scores=None):
+    num_plots = 3 if solver_scores else 2
+    fig, axs = plt.subplots(1, num_plots, figsize=(5 * num_plots, 4))
 
-    ax1.plot(rewards)
-    ax1.set_title("Episode Rewards")
-    ax1.set_xlabel("Episode")
-    ax1.set_ylabel("Reward")
+    axs[0].plot(rewards)
+    axs[0].set_title("Episode Rewards")
+    axs[0].set_xlabel("Episode")
+    axs[0].set_ylabel("Reward")
 
-    ax2.plot(losses)
-    ax2.set_title("Q-Network Losses")
-    ax2.set_xlabel("Steps")
-    ax2.set_ylabel("Loss")
+    axs[1].plot(losses)
+    axs[1].set_title("Q-Network Losses")
+    axs[1].set_xlabel("Steps")
+    axs[1].set_ylabel("Loss")
+
+    if solver_scores:
+        axs[2].plot(solver_scores)
+        axs[2].set_title("Solver Feedback Scores")
+        axs[2].set_xlabel("Episode")
+        axs[2].set_ylabel("Score")
 
     plt.tight_layout()
     plt.show()
+
 
 def generate_dungeon_with_model(agent, difficulty):
     env = DungeonEnvironment(difficulty)

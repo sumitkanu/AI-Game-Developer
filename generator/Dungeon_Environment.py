@@ -1,4 +1,4 @@
-from Generator_Agent import EMPTY, WALL, LAVA, TREASURE, EXIT, START, ENEMY
+from generator.Generator_Agent import EMPTY, WALL, LAVA, TREASURE, EXIT, START, ENEMY
 import numpy as np
 import torch
 import random
