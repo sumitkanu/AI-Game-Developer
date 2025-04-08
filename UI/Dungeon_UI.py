@@ -113,13 +113,13 @@ class DungeonGeneratorUI:
         
         # Image paths for dungeon elements - using existing images from your project
         self.element_images = {
-            EMPTY: self.load_image_or_color("Floor.png", COLOR_MAP[EMPTY]),
-            WALL: self.load_image_or_color("Wall.png", COLOR_MAP[WALL]),
-            LAVA: self.load_image_or_color("Lava.png", COLOR_MAP[LAVA]),
-            TREASURE: self.load_image_or_color("Treasure.png", COLOR_MAP[TREASURE]),
-            EXIT: self.load_image_or_color("Door.png", COLOR_MAP[EXIT]),
-            START: self.load_image_or_color("Start.png", COLOR_MAP[START]),
-            ENEMY: self.load_image_or_color("monster.png", COLOR_MAP[ENEMY])
+            EMPTY: self.load_image_or_color("UI/Floor.png", COLOR_MAP[EMPTY]),
+            WALL: self.load_image_or_color("UI/Wall.png", COLOR_MAP[WALL]),
+            LAVA: self.load_image_or_color("UI/Lava.png", COLOR_MAP[LAVA]),
+            TREASURE: self.load_image_or_color("UI/Treasure.png", COLOR_MAP[TREASURE]),
+            EXIT: self.load_image_or_color("UI/Door.png", COLOR_MAP[EXIT]),
+            START: self.load_image_or_color("UI/Start.png", COLOR_MAP[START]),
+            ENEMY: self.load_image_or_color("UI/monster.png", COLOR_MAP[ENEMY])
         }
         
         # Current dungeon data
@@ -311,10 +311,10 @@ class DungeonGeneratorUI:
             print("Solver error:", e)
 
 
-def main():
+def launch_ui():
     root = tk.Tk()
     app = DungeonGeneratorUI(root)
     root.mainloop()
 
 if __name__ == "__main__":
-    main()
+    launch_ui()
