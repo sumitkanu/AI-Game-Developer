@@ -26,7 +26,7 @@ def one_hot_encode_grid_with_cursor(grid, cursor, num_tile_types=7):
     # Add 8th channel for cursor
     cursor_channel = torch.zeros((1, 20, 20), dtype=torch.float32)
     cursor_x, cursor_y = cursor
-    cursor_channel[0, cursor_y, cursor_x] = 1.0
+    cursor_channel[0, cursor_x, cursor_y] = 1.0
 
     full_tensor = torch.cat([one_hot, cursor_channel], dim=0)  # [8, 20, 20]
     return full_tensor
@@ -93,9 +93,9 @@ def export_dungeon(grid):
     for row in range(rows):
         for col in range(cols):
             if grid[row, col] == START:
-                start_pos = (col, row)  # Note: using (col, row) format for x,y coordinates
+                start_pos = (row, col)
             elif grid[row, col] == EXIT:
-                exit_pos = (col, row)
+                exit_pos = (row, col)
 
     return (rows, cols), start_pos, exit_pos, grid
 
@@ -248,13 +248,13 @@ class DungeonGeneratorUI:
         y_offset = (self.canvas_size - (rows * cell_size)) // 2
         
         # Draw each cell
-        for y in range(rows):
-            for x in range(cols):
-                cell_value = self.current_grid[y, x]
+        for x in range(rows):
+            for y in range(cols):
+                cell_value = self.current_grid[x, y]
                 
                 # Calculate position
-                x1 = x_offset + x * cell_size
-                y1 = y_offset + y * cell_size
+                x1 = x_offset + y * cell_size
+                y1 = y_offset + x * cell_size 
                 x2 = x1 + cell_size
                 y2 = y1 + cell_size
                 
@@ -274,8 +274,8 @@ class DungeonGeneratorUI:
         if self.last_solver_path:
             for step in self.last_solver_path:
                 px, py = step
-                px1 = x_offset + px * cell_size
-                py1 = y_offset + py * cell_size
+                px1 = x_offset + py * cell_size
+                py1 = y_offset + px * cell_size
                 px2 = px1 + cell_size
                 py2 = py1 + cell_size
                 self.canvas.create_rectangle(px1, py1, px2, py2, outline="red", width=2)
@@ -284,7 +284,7 @@ class DungeonGeneratorUI:
     def update_stats(self):
         if self.current_grid is not None:
             rows, cols = self.current_grid.shape
-            self.size_var.set(f"Size: {cols}x{rows}")
+            self.size_var.set(f"Size: {rows}x{cols}")
             
             if self.current_start_pos:
                 self.start_var.set(f"Start: ({self.current_start_pos[0]},{self.current_start_pos[1]})")
@@ -301,7 +301,9 @@ class DungeonGeneratorUI:
 
         # Call solver
         try:
+            print(self.current_grid, self.current_start_pos, self.current_exit_pos)
             path, outcome = solve_generated_level(self.current_grid, self.current_start_pos, self.current_exit_pos)
+            print("Solver path:", path)
             self.last_solver_path = path
             self.last_solver_outcome = outcome
             self.solver_outcome_var.set(f"Solver: {outcome}")

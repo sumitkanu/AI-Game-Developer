@@ -18,7 +18,7 @@ def one_hot_encode_grid_with_cursor(grid, cursor, num_tile_types=7):
     # Add 8th channel for cursor
     cursor_channel = torch.zeros((1, 20, 20), dtype=torch.float32)
     cursor_x, cursor_y = cursor
-    cursor_channel[0, cursor_y, cursor_x] = 1.0
+    cursor_channel[0, cursor_x, cursor_y] = 1.0
 
     full_tensor = torch.cat([one_hot, cursor_channel], dim=0)
     return full_tensor
@@ -163,11 +163,11 @@ def generate_dungeon_with_model(agent, difficulty):
 def visualize_dungeon(grid):
     """Display dungeon grid using matplotlib."""
     fig, ax = plt.subplots(figsize=(6, 6))
-    for y in range(grid.shape[0]):
-        for x in range(grid.shape[1]):
+    for x in range(grid.shape[0]):
+        for y in range(grid.shape[1]):
             rect = plt.Rectangle(
-                (x, grid.shape[0] - y - 1), 1, 1,
-                facecolor=COLOR_MAP[grid[y, x]],
+                (y, grid.shape[0] - x - 1), 1, 1,
+                facecolor=COLOR_MAP[grid[x, y]],
                 edgecolor='black'
             )
             ax.add_patch(rect)
