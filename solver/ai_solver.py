@@ -2,7 +2,7 @@ import numpy as np
 import random
 from collections import deque
 
-# Define map elements
+# Map elements
 EMPTY = 0
 WALL = 1
 LAVA = 2
@@ -30,7 +30,7 @@ class DungeonSolverQLearning:
         self.actions = [(0, 1), (1, 0), (0, -1), (-1, 0)]
 
         self.rewards = {
-            EMPTY: -1,      # Encourage movement
+            EMPTY: -1,
             WALL: -1000,
             LAVA: -1000,
             TREASURE: 50,
@@ -92,10 +92,8 @@ class DungeonSolverQLearning:
                         self.alpha * (reward + self.gamma * max_future_q)
 
                     x, y = nx, ny
-            self.epsilon = 1.0  # start fully random
+            self.epsilon = 1.0
             self.epsilon = max(0.01, self.epsilon * 0.995)
-
-    from collections import deque
 
     def solve(self):
         path = []
@@ -126,17 +124,28 @@ class DungeonSolverQLearning:
                 nx, ny = x + dx, y + dy
                 if 0 <= nx < self.dungeon.shape[0] and 0 <= ny < self.dungeon.shape[1]:
                     if (nx, ny) == last_position:
-                        continue  # ⛔ Prevent immediate backtracking
+                        continue
 
                     cell = self.dungeon[nx, ny]
                     if (nx, ny) in visited_treasures and cell == TREASURE:
                         cell = EMPTY
 
                     if cell != WALL:
+                        nnx, nny = nx + dx, ny + dy
+                        future_penalty = 0
+                        if 0 <= nnx < self.dungeon.shape[0] and 0 <= nny < self.dungeon.shape[1]:
+                            future_cell = self.dungeon[nnx, nny]
+                            if future_cell == LAVA:
+                                future_penalty -= 200
+                            elif future_cell == WALL:
+                                future_penalty -= 100
+                            elif future_cell == TREASURE:
+                                future_penalty += 50
+
+                        score = self.q_table[x, y, i] + future_penalty
+
                         if cell == TREASURE and (nx, ny) not in visited_treasures and (nx, ny) not in recent_positions:
                             treasure_moves.append(i)
-
-                        score = self.q_table[x, y, i]
 
                         if cell == START and (nx, ny) != self.start:
                             continue
