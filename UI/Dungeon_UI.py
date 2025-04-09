@@ -11,18 +11,13 @@ import random
 import sys
 import os
 
-# 获取当前文件的目录
 current_dir = os.path.dirname(os.path.abspath(__file__))
-# 获取父目录（项目根目录）
 parent_dir = os.path.dirname(current_dir)
-# 将项目根目录添加到Python路径
 sys.path.append(parent_dir)
 
-# 然后再导入
 from solver.ai_solver import solve_generated_level
 
 
-# Direct imports from source files to avoid circular imports
 from generator.Generator_Agent import DungeonAgent, EMPTY, WALL, LAVA, TREASURE, EXIT, START, ENEMY, COLOR_MAP
 from generator.Dungeon_Environment import DungeonEnvironment
 
@@ -350,8 +345,8 @@ class DungeonGeneratorUI:
         if self.player_path:
             for step in self.player_path:
                 px, py = step
-                px1 = x_offset + px * cell_size
-                py1 = y_offset + py * cell_size
+                px1 = x_offset + py * cell_size
+                py1 = y_offset + px * cell_size
                 px2 = px1 + cell_size
                 py2 = py1 + cell_size
                 # Only draw path overlay
@@ -360,8 +355,8 @@ class DungeonGeneratorUI:
         # Draw player if playing
         if self.game_active and self.player_pos:
             px, py = self.player_pos
-            px1 = x_offset + px * cell_size
-            py1 = y_offset + py * cell_size
+            px1 = x_offset + py * cell_size
+            py1 = y_offset + px * cell_size
             
             # Draw player
             self.canvas.create_image(px1 + cell_size//2, py1 + cell_size//2, 
@@ -453,13 +448,13 @@ class DungeonGeneratorUI:
         # Determine direction
         new_x, new_y = x, y
         if event.keysym == "Up" or event.keysym == "w":
-            new_y = y - 1
+            new_x = x - 1  # Move up (row - 1)
         elif event.keysym == "Down" or event.keysym == "s":
-            new_y = y + 1
+            new_x = x + 1  # Move down (row + 1)
         elif event.keysym == "Left" or event.keysym == "a":
-            new_x = x - 1
+            new_y = y - 1  # Move left (col - 1)
         elif event.keysym == "Right" or event.keysym == "d":
-            new_x = x + 1
+            new_y = y + 1  # Move right (col + 1)
         elif event.keysym == "r":
             self.reset_game()
             return
@@ -467,10 +462,10 @@ class DungeonGeneratorUI:
             return  # Ignore other keys
             
         # Check if the move is valid
-        if new_x < 0 or new_y < 0 or new_x >= self.play_grid.shape[1] or new_y >= self.play_grid.shape[0]:
+        if new_x < 0 or new_y < 0 or new_x >= self.play_grid.shape[0] or new_y >= self.play_grid.shape[1]:
             return  # Out of bounds
             
-        cell_type = self.play_grid[new_y, new_x]
+        cell_type = self.play_grid[new_x, new_y]
         
         # Check for collision with walls
         if cell_type == WALL:
@@ -487,12 +482,12 @@ class DungeonGeneratorUI:
             
         elif cell_type == ENEMY:
             self.player_score -= 20
-            self.play_grid[new_y, new_x] = EMPTY  # Remove enemy
+            self.play_grid[new_x, new_y] = EMPTY  # Remove enemy
             messagebox.showinfo("Game", "You encountered an enemy! -20 points")
             
         elif cell_type == TREASURE:
             self.player_score += 50
-            self.play_grid[new_y, new_x] = EMPTY  # Remove treasure
+            self.play_grid[new_x, new_y] = EMPTY  # Remove treasure
             messagebox.showinfo("Game", "You found treasure! +50 points")
             
         elif cell_type == EXIT:
