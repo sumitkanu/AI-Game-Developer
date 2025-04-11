@@ -10,7 +10,7 @@ def main():
     if args.mode == "ui":
         launch_ui()
     elif args.mode == "train":
-        train_generator(num_episodes=5000)
+        train_generator(num_episodes=3000)
 
 if __name__ == "__main__":
     main()

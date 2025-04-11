@@ -85,7 +85,7 @@ class DungeonEnvironment:
         self.suggested_lava = int(playable_area * (0.01 + 0.01 * self.difficulty))
 
         #  New logic for treasure limit
-        max_treasure = max(1, int(0.4 * (playable_area ** 0.5)) - (self.difficulty // 2))
+        max_treasure = max(1, int(0.5 * (playable_area ** 0.5)) - (self.difficulty // 2))
         max_treasure = min(max_treasure, 15)
 
         lava_density = 0.005 + 0.001 * self.difficulty

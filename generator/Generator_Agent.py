@@ -12,6 +12,7 @@ TREASURE = 3
 EXIT = 4
 START = 5
 ENEMY = 6
+PLAYER = 7
 
 # Define Colors for Visualization
 COLOR_MAP = {
@@ -22,6 +23,7 @@ COLOR_MAP = {
     EXIT: "green",
     START: "blue",
     ENEMY: "purple",
+    PLAYER: "orange",
 }
 
 # Experience replay buffer
