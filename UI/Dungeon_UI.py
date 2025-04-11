@@ -46,8 +46,8 @@ class DungeonGeneratorUI:
             WALL: self.load_image_or_color("UI/Wall.png", COLOR_MAP[WALL]),
             LAVA: self.load_image_or_color("UI/Lava.png", COLOR_MAP[LAVA]),
             TREASURE: self.load_image_or_color("UI/Treasure.png", COLOR_MAP[TREASURE]),
-            EXIT: self.load_image_or_color("UI/Door.png", COLOR_MAP[EXIT]),
-            START: self.load_image_or_color("UI/Start.png", COLOR_MAP[START]),
+            EXIT: self.load_image_or_color("UI/door.png", COLOR_MAP[EXIT]),
+            START: self.load_image_or_color("UI/start.png", COLOR_MAP[START]),
             ENEMY: self.load_image_or_color("UI/monster.png", COLOR_MAP[ENEMY])
         }
         
