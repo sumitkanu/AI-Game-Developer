@@ -61,7 +61,7 @@ class DungeonEnvironment:
 
         # Place EXIT far away
         # Check find random empty cell
-        min_dist = (self.playable_width + self.playable_height) * 0.75
+        min_dist = (self.playable_width + self.playable_height) * 0.85
         self.exit_pos = self._find_random_empty_cell(exclude=[self.start_pos], avoid_near=self.start_pos, min_distance=min_dist)
         self.grid[self.exit_pos[0]][self.exit_pos[1]] = EXIT
 
@@ -85,12 +85,10 @@ class DungeonEnvironment:
         self.suggested_lava = int(playable_area * (0.01 + 0.01 * self.difficulty))
 
         #  New logic for treasure limit
-        max_treasure = max(1, int(0.25 * (playable_area ** 0.5)) - (self.difficulty // 2))
-        max_treasure = min(max_treasure, 10)
+        max_treasure = max(1, int(0.4 * (playable_area ** 0.5)) - (self.difficulty // 2))
+        max_treasure = min(max_treasure, 15)
 
-        #  Lava and wall density updates
-        lava_density = 0.01 + 0.005 * self.difficulty
-        wall_density = 0.2 + 0.02 * self.difficulty
+        lava_density = 0.005 + 0.001 * self.difficulty
 
         max_lava = int(playable_area * lava_density)
 
@@ -117,6 +115,7 @@ class DungeonEnvironment:
             for x in range(self.playable_start_x + 1, self.playable_end_x)
             if self.grid[x][y] == EMPTY and (x, y) not in exclude
         ]
+        random.shuffle(candidates)
 
         if avoid_near and min_distance > 0:
             candidates = [
@@ -149,6 +148,17 @@ class DungeonEnvironment:
             if (x, y) in [self.start_pos, self.exit_pos]:
                 attempts += 1
                 continue
+
+            min_start_distance = {
+                TREASURE: 3,
+                LAVA: 4,
+                ENEMY: 4,
+            }
+            required_dist = min_start_distance.get(tile, 3)
+            if abs(x - self.start_pos[0]) + abs(y - self.start_pos[1]) < required_dist:
+                attempts += 1
+                continue
+
 
             if self.grid[x][y] != EMPTY:
                 attempts += 1
@@ -249,7 +259,7 @@ class DungeonEnvironment:
     
                 elif tile == LAVA:
                     if self.object_counts[LAVA] > self.suggested_lava:
-                        reward -= 4
+                        reward -= 10
                     else:
                         reward += 2
     
@@ -260,9 +270,9 @@ class DungeonEnvironment:
                 if new_path_exists:
                     reward += 10
                 if prev_path_exists and not new_path_exists:
-                    reward -= 50
+                    reward -= 20
                 elif not prev_path_exists and new_path_exists:
-                    reward += 50
+                    reward += 20
     
         # ✅ End of episode logic
         if self.steps >= self.max_steps:
@@ -273,9 +283,9 @@ class DungeonEnvironment:
     
             if complexity > 0:
                 target_complexity = min(1.0, 0.3 + 0.07 * self.difficulty)
-                reward += (1 - abs(complexity - target_complexity)) * 20 + complexity * 100
+                reward += (1 - abs(complexity - target_complexity)) * 20 + complexity * 10
             else:
-                reward -= 100
+                reward -= 20
     
         return self._get_state(), reward, done
 
