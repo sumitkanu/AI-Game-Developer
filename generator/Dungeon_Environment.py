@@ -44,26 +44,26 @@ class DungeonEnvironment:
         self.visited_tiles = set()
 
         # Fill outer border with walls
-        for y in range(self.board_size):
-            for x in range(self.board_size):
+        for x in range(self.board_size):
+            for y in range(self.board_size):
                 if (
                     x < self.playable_start_x or x > self.playable_end_x or
                     y < self.playable_start_y or y > self.playable_end_y
                 ):
-                    self.grid[y][x] = WALL
+                    self.grid[x][y] = WALL
 
         #  Generate maze before placing START/EXIT
         self._generate_maze_layout()
 
         #  Place START
         self.start_pos = self._find_random_empty_cell()
-        self.grid[self.start_pos[1]][self.start_pos[0]] = START
+        self.grid[self.start_pos[0]][self.start_pos[1]] = START
 
         # Place EXIT far away
         # Check find random empty cell
-        min_dist = (self.playable_width + self.playable_height) * 0.75
+        min_dist = (self.playable_width + self.playable_height) * 0.85
         self.exit_pos = self._find_random_empty_cell(exclude=[self.start_pos], avoid_near=self.start_pos, min_distance=min_dist)
-        self.grid[self.exit_pos[1]][self.exit_pos[0]] = EXIT
+        self.grid[self.exit_pos[0]][self.exit_pos[1]] = EXIT
 
         #self._carve_simple_path(self.start_pos, self.exit_pos)
 
@@ -85,12 +85,10 @@ class DungeonEnvironment:
         self.suggested_lava = int(playable_area * (0.01 + 0.01 * self.difficulty))
 
         #  New logic for treasure limit
-        max_treasure = max(1, int(0.25 * (playable_area ** 0.5)) - (self.difficulty // 2))
-        max_treasure = min(max_treasure, 10)
+        max_treasure = max(1, int(0.4 * (playable_area ** 0.5)) - (self.difficulty // 2))
+        max_treasure = min(max_treasure, 15)
 
-        #  Lava and wall density updates
-        lava_density = 0.01 + 0.005 * self.difficulty
-        wall_density = 0.2 + 0.02 * self.difficulty
+        lava_density = 0.005 + 0.001 * self.difficulty
 
         max_lava = int(playable_area * lava_density)
 
@@ -115,8 +113,9 @@ class DungeonEnvironment:
             (x, y)
             for y in range(self.playable_start_y + 1, self.playable_end_y)
             for x in range(self.playable_start_x + 1, self.playable_end_x)
-            if self.grid[y][x] == EMPTY and (x, y) not in exclude
+            if self.grid[x][y] == EMPTY and (x, y) not in exclude
         ]
+        random.shuffle(candidates)
 
         if avoid_near and min_distance > 0:
             candidates = [
@@ -136,7 +135,7 @@ class DungeonEnvironment:
             (x, y)
             for y in range(self.playable_start_y + 1, self.playable_end_y)
             for x in range(self.playable_start_x + 1, self.playable_end_x)
-            if self.grid[y][x] == tile
+            if self.grid[x][y] == tile
         ]
 
         # Generate a noise map for more natural placement
@@ -150,7 +149,18 @@ class DungeonEnvironment:
                 attempts += 1
                 continue
 
-            if self.grid[y][x] != EMPTY:
+            min_start_distance = {
+                TREASURE: 3,
+                LAVA: 4,
+                ENEMY: 4,
+            }
+            required_dist = min_start_distance.get(tile, 3)
+            if abs(x - self.start_pos[0]) + abs(y - self.start_pos[1]) < required_dist:
+                attempts += 1
+                continue
+
+
+            if self.grid[x][y] != EMPTY:
                 attempts += 1
                 continue
 
@@ -163,7 +173,7 @@ class DungeonEnvironment:
                 # Avoid placing next to another treasure
                 neighbors = [(x + dx, y + dy) for dx in [-1, 0, 1] for dy in [-1, 0, 1] if (dx != 0 or dy != 0)]
                 near_treasure = any(
-                    0 <= nx < self.board_size and 0 <= ny < self.board_size and self.grid[ny][nx] == TREASURE
+                    0 <= nx < self.board_size and 0 <= ny < self.board_size and self.grid[nx][ny] == TREASURE
                     for nx, ny in neighbors
                 )
                 if near_treasure:
@@ -171,7 +181,7 @@ class DungeonEnvironment:
                     continue
 
                 # Soft-distribution using noise map
-                if noise[y][x] < 0.3:  # require higher randomness for spacing
+                if noise[x][y] < 0.3:  # require higher randomness for spacing
                     attempts += 1
                     continue
 
@@ -182,11 +192,11 @@ class DungeonEnvironment:
                 continue
 
             # Use noise as a soft priority (prefer high noise values)
-            if noise[y][x] < 0.5:
+            if noise[x][y] < 0.5:
                 attempts += 1
                 continue
 
-            self.grid[y][x] = tile
+            self.grid[x][y] = tile
             existing_positions.append((x, y))
             placed += 1
             if tile in self.object_counts:
@@ -211,7 +221,7 @@ class DungeonEnvironment:
             prev_path_exists = self._calculate_path_complexity() > 0
             tile = self.placement_types[action - 4]
             cx, cy = self.cursor
-            current_tile = self.grid[cy][cx]
+            current_tile = self.grid[cx][cy]
     
             if (cx, cy) in [self.start_pos, self.exit_pos]:
                 reward -= 15
@@ -219,7 +229,7 @@ class DungeonEnvironment:
                 if current_tile in self.object_counts:
                     self.object_counts[current_tile] = max(0, self.object_counts[current_tile] - 1)
     
-                self.grid[cy][cx] = tile
+                self.grid[cx][cy] = tile
                 
                 if tile in self.object_counts:
                     self.object_counts[tile] += 1
@@ -236,7 +246,7 @@ class DungeonEnvironment:
                         nearby = sum(
                             1 for dx in range(-2, 3) for dy in range(-2, 3)
                             if 0 <= cx + dx < self.board_size and 0 <= cy + dy < self.board_size and
-                            self.grid[cy + dy][cx + dx] == TREASURE
+                            self.grid[cx + dx][cy + dy] == TREASURE
                         )
                         if nearby > 2:
                             reward -= 2
@@ -249,7 +259,7 @@ class DungeonEnvironment:
     
                 elif tile == LAVA:
                     if self.object_counts[LAVA] > self.suggested_lava:
-                        reward -= 4
+                        reward -= 10
                     else:
                         reward += 2
     
@@ -260,9 +270,9 @@ class DungeonEnvironment:
                 if new_path_exists:
                     reward += 10
                 if prev_path_exists and not new_path_exists:
-                    reward -= 50
+                    reward -= 20
                 elif not prev_path_exists and new_path_exists:
-                    reward += 50
+                    reward += 20
     
         # ✅ End of episode logic
         if self.steps >= self.max_steps:
@@ -273,9 +283,9 @@ class DungeonEnvironment:
     
             if complexity > 0:
                 target_complexity = min(1.0, 0.3 + 0.07 * self.difficulty)
-                reward += (1 - abs(complexity - target_complexity)) * 20 + complexity * 100
+                reward += (1 - abs(complexity - target_complexity)) * 20 + complexity * 10
             else:
-                reward -= 100
+                reward -= 20
     
         return self._get_state(), reward, done
 
@@ -293,7 +303,7 @@ class DungeonEnvironment:
         # Cursor as binary channel
         cursor_channel = np.zeros((1, self.board_size, self.board_size), dtype=np.float32)
         cursor_x, cursor_y = self.cursor
-        cursor_channel[0, cursor_y, cursor_x] = 1.0
+        cursor_channel[0, cursor_x, cursor_y] = 1.0
     
         # Stack to form 8-channel input
         combined = np.concatenate([one_hot_grid, cursor_channel], axis=0)  # [8, 20, 20]
@@ -307,7 +317,7 @@ class DungeonEnvironment:
         allowed_tiles = {EMPTY, START, EXIT, ENEMY, TREASURE, LAVA}
         visited = np.zeros((self.board_size, self.board_size), dtype=bool)
         queue = [(self.start_pos, 0, [self.start_pos])]
-        visited[self.start_pos[1]][self.start_pos[0]] = True
+        visited[self.start_pos[0]][self.start_pos[1]] = True
     
         best_path = []
         best_score = 0
@@ -319,7 +329,7 @@ class DungeonEnvironment:
                 # ✅ Measure complexity components
                 num_special_tiles = sum(
                     1 for (px, py) in path
-                    if self.grid[py][px] in {ENEMY, TREASURE, LAVA}
+                    if self.grid[px][py] in {ENEMY, TREASURE, LAVA}
                 )
     
                 normalized_length = dist / (self.playable_width + self.playable_height)
@@ -336,8 +346,8 @@ class DungeonEnvironment:
                 nx, ny = x + dx, y + dy
                 if (self.playable_start_x <= nx <= self.playable_end_x and
                     self.playable_start_y <= ny <= self.playable_end_y and
-                    not visited[ny, nx] and self.grid[ny][nx] in allowed_tiles):
-                    visited[ny, nx] = True
+                    not visited[nx][ny] and self.grid[nx][ny] in allowed_tiles):
+                    visited[nx][ny] = True
                     queue.append(((nx, ny), dist + 1, path + [(nx, ny)]))
     
         if return_path:
@@ -350,10 +360,10 @@ class DungeonEnvironment:
         maze = np.ones((self.playable_height, self.playable_width), dtype=np.int8)
 
         def in_bounds(x, y):
-            return 0 <= x < self.playable_width and 0 <= y < self.playable_height
+            return 0 <= x < self.playable_height and 0 <= y < self.playable_width
 
         def neighbors(x, y):
-            dirs = [(-2, 0), (2, 0), (0, -2), (0, 2)]
+            dirs = [(-2, 0), (2, 0), (0, -2), (0, 2)]  # move in cardinal directions
             result = []
             for dx, dy in dirs:
                 nx, ny = x + dx, y + dy
@@ -361,25 +371,26 @@ class DungeonEnvironment:
                     result.append((nx, ny))
             return result
 
-        start_x = random.randrange(1, self.playable_width, 2)
-        start_y = random.randrange(1, self.playable_height, 2)
-        maze[start_y][start_x] = 0
+        start_x = random.randrange(1, self.playable_height, 2)
+        start_y = random.randrange(1, self.playable_width, 2)
+        maze[start_x][start_y] = 0  # ✅ x = row, y = col
+
         frontier = [(start_x, start_y)]
 
         while frontier:
             x, y = frontier.pop(random.randint(0, len(frontier) - 1))
             for nx, ny in neighbors(x, y):
-                if maze[ny][nx] == 1:
+                if maze[nx][ny] == 1:  # ✅ row = x
                     between_x = (x + nx) // 2
                     between_y = (y + ny) // 2
-                    maze[ny][nx] = 0
-                    maze[between_y][between_x] = 0
+                    maze[nx][ny] = 0
+                    maze[between_x][between_y] = 0
                     frontier.append((nx, ny))
 
         # Convert maze to global coordinates
-        for y in range(self.playable_height):
-            for x in range(self.playable_width):
+        for x in range(self.playable_height):  # x = row index
+            for y in range(self.playable_width):  # y = col index
                 global_x = self.playable_start_x + x
                 global_y = self.playable_start_y + y
-                if maze[y][x] == 1:
-                    self.grid[global_y][global_x] = WALL
+                if maze[x][y] == 1:  # ✅ row=x, col=y
+                    self.grid[global_x][global_y] = WALL

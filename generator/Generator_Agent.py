@@ -88,7 +88,7 @@ class DungeonAgent:
         self.tau = tau
         self.epsilon = epsilon_start
         self.epsilon_min = epsilon_end
-        self.epsilon_decay = epsilon_decay
+        # self.epsilon_decay = epsilon_decay
         self.training_losses = []
 
         # Q-Network (CNN)
@@ -142,18 +142,19 @@ class DungeonAgent:
             q_target = rewards + (1 - dones) * self.gamma * q_next.max(1)[0]
 
         # Loss and backpropagation
-        loss = F.mse_loss(q_expected, q_target)
+        loss = F.smooth_l1_loss(q_expected, q_target)
         self.training_losses.append(loss.item())
 
         self.optimizer.zero_grad()
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.qnetwork.parameters(), max_norm=1.0)
         self.optimizer.step()
 
         # Soft update target network
         self.soft_update()
 
         # Epsilon decay
-        self.epsilon = max(self.epsilon_min, self.epsilon * self.epsilon_decay)
+        # self.epsilon = max(self.epsilon_min, self.epsilon * self.epsilon_decay)
 
     def soft_update(self):
         for target_param, local_param in zip(self.target_network.parameters(), self.qnetwork.parameters()):

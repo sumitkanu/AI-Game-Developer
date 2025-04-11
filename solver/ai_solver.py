@@ -1,8 +1,9 @@
 import numpy as np
 import random
 from collections import deque
+from numba import njit
 
-# Define map elements
+# Map elements
 EMPTY = 0
 WALL = 1
 LAVA = 2
@@ -30,7 +31,7 @@ class DungeonSolverQLearning:
         self.actions = [(0, 1), (1, 0), (0, -1), (-1, 0)]
 
         self.rewards = {
-            EMPTY: -1,      # Encourage movement
+            EMPTY: -1,
             WALL: -1000,
             LAVA: -1000,
             TREASURE: 50,
@@ -40,62 +41,79 @@ class DungeonSolverQLearning:
         }
 
     def train(self):
-        max_steps = 500
-        gx, gy = self.goal
+        rewards_array = np.array([
+            self.rewards[EMPTY],    # 0
+            self.rewards[WALL],     # 1
+            self.rewards[LAVA],     # 2
+            self.rewards[TREASURE], # 3
+            self.rewards[EXIT],     # 4
+            self.rewards[START],    # 5
+            self.rewards[ENEMY],    # 6
+        ], dtype=np.float32)
 
-        for episode in range(self.episodes):
-            self.dungeon = np.copy(self.original_dungeon)
-            self.dungeon[gx, gy] = EXIT
+        self.dungeon = np.copy(self.original_dungeon)
+        self.q_table = q_learning_train_loop(
+            self.dungeon, self.q_table, self.start, self.goal,
+            rewards_array, self.alpha, self.gamma,
+            self.episodes, max_steps=500,
+            epsilon_start=1.0, epsilon_end=0.1
+        )
 
-            x, y = self.start
-            health = 100
-            steps = 0
+    # def train(self):
+    #     max_steps = 500
+    #     gx, gy = self.goal
 
-            while (x, y) != self.goal and steps < max_steps:
-                steps += 1
+    #     for episode in range(self.episodes):
+    #         self.dungeon = np.copy(self.original_dungeon)
+    #         self.dungeon[gx, gy] = EXIT
 
-                if random.uniform(0, 1) < self.epsilon:
-                    action = random.choice(range(4))
-                else:
-                    action = np.argmax(self.q_table[x, y])
+    #         x, y = self.start
+    #         health = 100
+    #         steps = 0
 
-                dx, dy = self.actions[action]
-                nx, ny = x + dx, y + dy
+    #         while (x, y) != self.goal and steps < max_steps:
+    #             steps += 1
 
-                if 0 <= nx < self.dungeon.shape[0] and 0 <= ny < self.dungeon.shape[1]:
-                    cell_type = self.dungeon[nx, ny]
+    #             if random.uniform(0, 1) < self.epsilon:
+    #                 action = random.choice(range(4))
+    #             else:
+    #                 action = np.argmax(self.q_table[x, y])
 
-                    if cell_type == WALL:
-                        continue
+    #             dx, dy = self.actions[action]
+    #             nx, ny = x + dx, y + dy
 
-                    if cell_type == LAVA:
-                        self.q_table[x, y, action] = -1000
-                        break
+    #             if 0 <= nx < self.dungeon.shape[0] and 0 <= ny < self.dungeon.shape[1]:
+    #                 cell_type = self.dungeon[nx, ny]
 
-                    if cell_type == ENEMY:
-                        reward = self.rewards[ENEMY]
-                        self.q_table[x, y, action] = (1 - self.alpha) * self.q_table[x, y, action] + \
-                            self.alpha * (reward + self.gamma * 0)
-                        health -= 20
-                        if health <= 0:
-                            break
+    #                 if cell_type == WALL:
+    #                     continue
 
-                    reward = self.rewards.get(cell_type, -1)
+    #                 if cell_type == LAVA:
+    #                     self.q_table[x, y, action] = -1000
+    #                     break
 
-                    if cell_type == TREASURE:
-                        health += 50
-                        reward += 100
-                        self.dungeon[nx, ny] = EMPTY
+    #                 if cell_type == ENEMY:
+    #                     reward = self.rewards[ENEMY]
+    #                     self.q_table[x, y, action] = (1 - self.alpha) * self.q_table[x, y, action] + \
+    #                         self.alpha * (reward + self.gamma * 0)
+    #                     health -= 20
+    #                     if health <= 0:
+    #                         break
 
-                    max_future_q = np.max(self.q_table[nx, ny])
-                    self.q_table[x, y, action] = (1 - self.alpha) * self.q_table[x, y, action] + \
-                        self.alpha * (reward + self.gamma * max_future_q)
+    #                 reward = self.rewards.get(cell_type, -1)
 
-                    x, y = nx, ny
-            self.epsilon = 1.0  # start fully random
-            self.epsilon = max(0.01, self.epsilon * 0.995)
+    #                 if cell_type == TREASURE:
+    #                     health += 50
+    #                     reward += 100
+    #                     self.dungeon[nx, ny] = EMPTY
 
-    from collections import deque
+    #                 max_future_q = np.max(self.q_table[nx, ny])
+    #                 self.q_table[x, y, action] = (1 - self.alpha) * self.q_table[x, y, action] + \
+    #                     self.alpha * (reward + self.gamma * max_future_q)
+
+    #                 x, y = nx, ny
+    #         self.epsilon = 1.0
+    #         self.epsilon = max(0.01, self.epsilon * 0.995)
 
     def solve(self):
         path = []
@@ -126,17 +144,28 @@ class DungeonSolverQLearning:
                 nx, ny = x + dx, y + dy
                 if 0 <= nx < self.dungeon.shape[0] and 0 <= ny < self.dungeon.shape[1]:
                     if (nx, ny) == last_position:
-                        continue  # ⛔ Prevent immediate backtracking
+                        continue
 
                     cell = self.dungeon[nx, ny]
                     if (nx, ny) in visited_treasures and cell == TREASURE:
                         cell = EMPTY
 
                     if cell != WALL:
+                        nnx, nny = nx + dx, ny + dy
+                        future_penalty = 0
+                        if 0 <= nnx < self.dungeon.shape[0] and 0 <= nny < self.dungeon.shape[1]:
+                            future_cell = self.dungeon[nnx, nny]
+                            if future_cell == LAVA:
+                                future_penalty -= 200
+                            elif future_cell == WALL:
+                                future_penalty -= 100
+                            elif future_cell == TREASURE:
+                                future_penalty += 50
+
+                        score = self.q_table[x, y, i] + future_penalty
+
                         if cell == TREASURE and (nx, ny) not in visited_treasures and (nx, ny) not in recent_positions:
                             treasure_moves.append(i)
-
-                        score = self.q_table[x, y, i]
 
                         if cell == START and (nx, ny) != self.start:
                             continue
@@ -186,6 +215,62 @@ class DungeonSolverQLearning:
             return path, f"Reached exit at {self.goal} with {health} health."
         else:
             return path, "Did not reach exit, ran out of steps."
+
+@njit
+def q_learning_train_loop(dungeon, q_table, start, goal, rewards, alpha, gamma,
+                          episodes, max_steps, epsilon_start, epsilon_end):
+
+    actions = [(0, 1), (1, 0), (0, -1), (-1, 0)]
+    gx, gy = goal
+    dungeon_shape = dungeon.shape
+
+    for ep in range(episodes):
+        
+        epsilon = epsilon_start - ((epsilon_start - epsilon_end) * (ep / episodes))
+        x, y = start
+        health = 100
+
+        for step in range(max_steps):
+            if (x, y) == goal:
+                break
+
+            if np.random.rand() < epsilon:
+                action = np.random.randint(0, 4)
+            else:
+                action = np.argmax(q_table[x, y])
+
+            dx, dy = actions[action]
+            nx, ny = x + dx, y + dy
+
+            if not (0 <= nx < dungeon_shape[0] and 0 <= ny < dungeon_shape[1]):
+                continue
+
+            cell_type = dungeon[nx, ny]
+            if cell_type == 1:  # WALL
+                continue
+            if cell_type == 2:  # LAVA
+                q_table[x, y, action] = -1000
+                break
+
+            reward = rewards[cell_type]
+
+            if cell_type == 6:  # ENEMY
+                health -= 20
+                if health <= 0:
+                    break
+
+            if cell_type == 3:  # TREASURE
+                health += 50
+                reward += 100
+                dungeon[nx, ny] = 0  # clear treasure
+
+            max_future_q = np.max(q_table[nx, ny])
+            q_table[x, y, action] = (1 - alpha) * q_table[x, y, action] + \
+                                    alpha * (reward + gamma * max_future_q)
+
+            x, y = nx, ny
+
+    return q_table
 
 def solve_generated_level(dungeon, start, goal):
     solver = DungeonSolverQLearning(dungeon, start, goal)
