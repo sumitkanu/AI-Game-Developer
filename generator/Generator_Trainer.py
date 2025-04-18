@@ -5,6 +5,7 @@ import torch.nn.functional as F
 import random
 import csv
 import json
+from queue import deque
 from generator.Dungeon_Environment import DungeonEnvironment
 from generator.Generator_Agent import DungeonAgent, COLOR_MAP, EXIT, START, TREASURE
 from solver.ai_solver import solve_generated_level
@@ -223,22 +224,29 @@ def plot_training_diagnostics(rewards, losses, solver_scores=None):
 
 
 def generate_dungeon_with_model(agent, difficulty):
-    env = DungeonEnvironment(difficulty)
-    state = env.reset()  # returns just the grid
-    done = False
+    while(True):
+        env = DungeonEnvironment(difficulty)
+        env.reset()
+        done = False
 
-    while not done:
-        grid_tensor, difficulty_tensor = state  # since env.reset() returns (grid_tensor, difficulty_tensor)
-        difficulty_tensor = torch.tensor([[difficulty / 10.0]], dtype=torch.float32)
+        # Prepare the initial state
+        grid_tensor = one_hot_encode_grid_with_cursor(env.grid, env.cursor).unsqueeze(0)
+        difficulty_tensor = encode_difficulty(env.difficulty)
+        state = (grid_tensor, difficulty_tensor)
 
-        action = agent.act(grid_tensor, difficulty_tensor, eps_override=0.0)
+        while not done:
+            action = agent.act(*state, eps_override=0.0)
+            if random.random() < 0.2:
+                action = random.randint(0, 8)
+            next_state, _, done = env.step(action)
+            state = next_state
 
-        if random.random() < 0.2:
-            action = random.randint(0, 8)
+        _, start, goal, grid = export_dungeon(env.grid)
 
-        state, _, done = env.step(action)
+        if is_path_valid(grid, start, goal):
+            print("Grid generated:", grid, "Start:", start, "Goal:", goal)
+            return env.grid
 
-    return env.grid
 
 def visualize_dungeon(grid):
     """Display dungeon grid using matplotlib."""
@@ -280,7 +288,7 @@ def export_dungeon(grid):
 
     return (rows, cols), start_pos, exit_pos, grid
 
-def load_trained_agent(model_path="dungeon_rl_model.pth"):
+def load_trained_agent(model_path="dungeon_rl_model_5000.pth"):
     """Load the trained model weights into a new agent."""
     grid_size = 20 * 20
     tile_types = len(COLOR_MAP)
@@ -293,6 +301,31 @@ def load_trained_agent(model_path="dungeon_rl_model.pth"):
 
     print(f"Model loaded from: {model_path}")
     return agent
+
+def is_path_valid(grid, start, goal):
+    rows, cols = grid.shape
+    visited = set()
+    queue = deque([start])
+
+    # Tiles to avoid: WALL (1), LAVA (2)
+    invalid_tiles = {1, 2}
+
+    while queue:
+        x, y = queue.popleft()
+        if (x, y) == goal:
+            return True
+
+        for dx, dy in [(0, 1), (1, 0), (0, -1), (-1, 0)]:
+            nx, ny = x + dx, y + dy
+            if (
+                0 <= nx < rows and 0 <= ny < cols and
+                (nx, ny) not in visited and
+                grid[nx, ny] not in invalid_tiles
+            ):
+                visited.add((nx, ny))
+                queue.append((nx, ny))
+
+    return False
 
 # Create a CSV logging function for training metrics
 def save_training_metrics_csv(

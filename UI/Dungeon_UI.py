@@ -1,6 +1,8 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
 import matplotlib
+
+from generator.Generator_Trainer import export_dungeon, generate_dungeon_with_model, load_trained_agent
 matplotlib.use("TkAgg")
 import numpy as np
 from PIL import Image, ImageTk
@@ -16,100 +18,15 @@ parent_dir = os.path.dirname(current_dir)
 sys.path.append(parent_dir)
 
 from solver.ai_solver import solve_generated_level
-
-
 from generator.Generator_Agent import DungeonAgent, EMPTY, WALL, LAVA, TREASURE, EXIT, START, ENEMY, COLOR_MAP
 from generator.Dungeon_Environment import DungeonEnvironment
-
-def one_hot_encode_grid_with_cursor(grid, cursor, num_tile_types=7):
-    """
-    Converts a 2D grid and cursor position into an 8-channel tensor [8, 20, 20]
-    """
-    grid_tensor = torch.tensor(grid, dtype=torch.long)
-    one_hot = F.one_hot(grid_tensor, num_classes=num_tile_types)  # [20, 20, 7]
-    one_hot = one_hot.permute(2, 0, 1).float()  # [7, 20, 20]
-
-    # Add 8th channel for cursor
-    cursor_channel = torch.zeros((1, 20, 20), dtype=torch.float32)
-    cursor_x, cursor_y = cursor
-    cursor_channel[0, cursor_x, cursor_y] = 1.0
-
-    full_tensor = torch.cat([one_hot, cursor_channel], dim=0)  # [8, 20, 20]
-    return full_tensor
-
-def encode_difficulty(difficulty):
-    """
-    Converts a scalar difficulty (1–10) into a normalized tensor [B, 1]
-    """
-    return torch.tensor([[difficulty / 10.0]], dtype=torch.float32)  # shape [1, 1]
-
-def load_trained_agent(model_path="dungeon_rl_model.pth"):
-    """Load the trained model weights into a new agent."""
-    action_size = 9
-
-    agent = DungeonAgent(action_size=action_size)
-    try:
-        agent.qnetwork.load_state_dict(torch.load(model_path, map_location=torch.device('cpu')))
-        agent.qnetwork.eval()
-        print(f"Model loaded from: {model_path}")
-    except Exception as e:
-        print(f"Error loading model: {e}")
-        print("Using untrained agent instead")
-    
-    return agent
-
-def generate_dungeon_with_model(agent, difficulty):
-    """Generate a dungeon using the trained agent."""
-    env = DungeonEnvironment(difficulty)
-    env.reset()
-    done = False
-
-    # Prepare the initial state
-    grid_tensor = one_hot_encode_grid_with_cursor(env.grid, env.cursor).unsqueeze(0)
-    difficulty_tensor = encode_difficulty(env.difficulty)
-    state = (grid_tensor, difficulty_tensor)
-
-    while not done:
-        action = agent.act(*state, eps_override=0.0)
-
-        # Add some randomness for variety
-        if random.random() < 0.2:
-            action = random.randint(0, 8)
-
-        # Environment transition
-        next_state, _, done = env.step(action)
-        
-        # Update state
-        state = next_state
-
-    return env.grid
-
-def export_dungeon(grid):
-    """
-    Inspect a dungeon grid and return:
-        - its size (width, height)
-        - the start position (START tile)
-        - the exit position (EXIT tile)
-        - the grid itself
-    """
-    rows, cols = grid.shape
-    start_pos = None
-    exit_pos = None
-
-    for row in range(rows):
-        for col in range(cols):
-            if grid[row, col] == START:
-                start_pos = (row, col)
-            elif grid[row, col] == EXIT:
-                exit_pos = (row, col)
-
-    return (rows, cols), start_pos, exit_pos, grid
 
 class DungeonGeneratorUI:
     def __init__(self, root):
         self.root = root
         self.root.title("Dungeon Generator")
-        self.root.geometry("750x600")
+        self.root.geometry("1000x1000")
+        self.canvas_size = 700
         self.last_solver_path = None
         self.last_solver_outcome = ""
         self.solver_outcome_var = tk.StringVar(value="Solver: Not yet run")
@@ -129,8 +46,8 @@ class DungeonGeneratorUI:
             WALL: self.load_image_or_color("UI/Wall.png", COLOR_MAP[WALL]),
             LAVA: self.load_image_or_color("UI/Lava.png", COLOR_MAP[LAVA]),
             TREASURE: self.load_image_or_color("UI/Treasure.png", COLOR_MAP[TREASURE]),
-            EXIT: self.load_image_or_color("UI/Door.png", COLOR_MAP[EXIT]),
-            START: self.load_image_or_color("UI/Start.png", COLOR_MAP[START]),
+            EXIT: self.load_image_or_color("UI/door.png", COLOR_MAP[EXIT]),
+            START: self.load_image_or_color("UI/start.png", COLOR_MAP[START]),
             ENEMY: self.load_image_or_color("UI/monster.png", COLOR_MAP[ENEMY])
         }
         
@@ -162,7 +79,7 @@ class DungeonGeneratorUI:
         try:
             if os.path.exists(image_path):
                 img = Image.open(image_path)
-                img = img.resize((25, 25))  # Resize to fit grid cells
+                img = img.resize((self.canvas_size // 20, self.canvas_size // 20))
                 return ImageTk.PhotoImage(img)
             print(f"Image not found: {image_path}, using color instead")
             return color
@@ -180,7 +97,6 @@ class DungeonGeneratorUI:
         dungeon_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         
         # Canvas for dungeon grid
-        self.canvas_size = 500
         self.canvas = tk.Canvas(dungeon_frame, width=self.canvas_size, height=self.canvas_size,
                               bg="white", highlightthickness=1, highlightbackground="black")
         self.canvas.pack(padx=10, pady=10)

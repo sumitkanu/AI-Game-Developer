@@ -12,6 +12,7 @@ TREASURE = 3
 EXIT = 4
 START = 5
 ENEMY = 6
+PLAYER = 7
 
 # Define Colors for Visualization
 COLOR_MAP = {
@@ -22,6 +23,7 @@ COLOR_MAP = {
     EXIT: "green",
     START: "blue",
     ENEMY: "purple",
+    PLAYER: "orange",
 }
 
 # Experience replay buffer
@@ -99,6 +101,8 @@ class DungeonAgent:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.qnetwork.to(self.device)
         self.target_network.to(self.device)
+        self.learn_step_counter = 0
+        self.update_every = 5 
 
     def act(self, grid_tensor, difficulty_tensor, eps_override=None):
         """Choose action based on epsilon-greedy strategy."""
@@ -150,8 +154,9 @@ class DungeonAgent:
         torch.nn.utils.clip_grad_norm_(self.qnetwork.parameters(), max_norm=1.0)
         self.optimizer.step()
 
-        # Soft update target network
-        self.soft_update()
+        self.learn_step_counter += 1
+        if self.learn_step_counter % self.update_every == 0:
+            self.soft_update()
 
         # Epsilon decay
         # self.epsilon = max(self.epsilon_min, self.epsilon * self.epsilon_decay)
