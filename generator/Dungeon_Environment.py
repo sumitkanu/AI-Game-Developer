@@ -55,6 +55,9 @@ class DungeonEnvironment:
         #  Generate maze before placing START/EXIT
         self._generate_maze_layout()
 
+        self.initial_wall_count = (self.grid == WALL).sum()
+        self.allowed_walls = self.initial_wall_count + 5 + self.difficulty
+
         #  Place START
         self.start_pos = self._find_random_empty_cell()
         self.grid[self.start_pos[0]][self.start_pos[1]] = START
@@ -208,7 +211,13 @@ class DungeonEnvironment:
         self.steps += 1
         reward = 0
         done = False
-    
+
+        self.tile_visit_count = getattr(self, 'tile_visit_count', {})
+        key = tuple(self.cursor)
+        self.tile_visit_count[key] = self.tile_visit_count.get(key, 0) + 1
+        if self.tile_visit_count[key] > 3:
+            reward -= 1  # penalize overusing same tile
+
         if action < 4:
             # Movement: up, down, left, right
             dx, dy = [(0, -1), (0, 1), (-1, 0), (1, 0)][action]
@@ -235,7 +244,11 @@ class DungeonEnvironment:
                     self.object_counts[tile] += 1
     
                 if tile == WALL:
-                    reward += 2
+                    current_walls = self.object_counts[WALL]
+                    if current_walls > self.allowed_walls:
+                        reward -= 5
+                    else:
+                        reward += 1.0 
                 elif tile == TREASURE:
                     if self.object_counts[TREASURE] > self.suggested_treasure:
                         reward -= 5
@@ -278,14 +291,21 @@ class DungeonEnvironment:
         if self.steps >= self.max_steps:
             done = True
             complexity = self._calculate_path_complexity()
-            exploration_bonus = len(self.visited_tiles)  # Each new tile visited gives +0.2
+            exploration_bonus = 0.2 * len(self.visited_tiles)
             reward += exploration_bonus
     
             if complexity > 0:
                 target_complexity = min(1.0, 0.3 + 0.07 * self.difficulty)
-                reward += (1 - abs(complexity - target_complexity)) * 20 + complexity * 10
+                path_bonus = (1 - abs(complexity - target_complexity)) * 20
+                reward += path_bonus + complexity * 10
             else:
-                reward -= 20
+                reward -= 30
+            
+            unique, counts = np.unique(self.grid, return_counts=True)
+            probs = counts / counts.sum()
+            entropy = -np.sum(probs * np.log2(probs + 1e-9))  # +1e-9 to avoid log(0)
+            reward += 0.5 * entropy
+
     
         return self._get_state(), reward, done
 
@@ -314,7 +334,7 @@ class DungeonEnvironment:
         return grid_tensor, difficulty_tensor
 
     def _calculate_path_complexity(self, return_path=False):
-        allowed_tiles = {EMPTY, START, EXIT, ENEMY, TREASURE, LAVA}
+        allowed_tiles = {EMPTY, START, EXIT, ENEMY, TREASURE}
         visited = np.zeros((self.board_size, self.board_size), dtype=bool)
         queue = [(self.start_pos, 0, [self.start_pos])]
         visited[self.start_pos[0]][self.start_pos[1]] = True
@@ -328,14 +348,28 @@ class DungeonEnvironment:
             if (x, y) == self.exit_pos:
                 # ✅ Measure complexity components
                 num_special_tiles = sum(
+                    5 for (px, py) in path
+                    if self.grid[px][py] in {ENEMY}
+                )
+
+                num_special_tiles += sum(
                     1 for (px, py) in path
-                    if self.grid[px][py] in {ENEMY, TREASURE, LAVA}
+                    if self.grid[px][py] in {TREASURE}
                 )
     
+                num_danger_near_path = sum(
+                    1 for (px, py) in path
+                    if any(
+                        0 <= px + dx < self.board_size and
+                        0 <= py + dy < self.board_size and
+                        self.grid[px + dx][py + dy] == LAVA
+                        for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]
+                    )
+                )
+
                 normalized_length = dist / (self.playable_width + self.playable_height)
-                complexity_score = normalized_length + 0.05 * num_special_tiles
+                complexity_score = normalized_length + 0.05 * num_special_tiles + 0.02 * num_danger_near_path
     
-                # Optionally keep most complex valid path
                 if complexity_score > best_score:
                     best_score = complexity_score
                     best_path = path
